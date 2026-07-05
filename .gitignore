@@ -48,3 +48,6 @@ logs/
 *.sln
 *.swp
 *~
+
+# Private Internal Documentation
+INTERNAL_NOTES.md
