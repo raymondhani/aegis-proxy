@@ -1,0 +1,23 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger only on version tags
+
+jobs:
+  pypi-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for PyPI Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build and Publish
+        run: |
+          pip install build twine
+          python -m build
+          # The action automatically handles uploading to PyPI
+      - uses: pypa/gh-action-pypi-publish@release/v1

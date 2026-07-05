@@ -294,6 +294,8 @@ def safe_db_run(func=None, *, validation_rules=None):
                     kwargs["db_url"] = proxy_db_url
                 elif "db_uri" in sig.parameters:
                     kwargs["db_uri"] = proxy_db_url
+                elif "proxy_conn_string" in sig.parameters:
+                    kwargs["proxy_conn_string"] = proxy_db_url
 
                 # 8. Run execution
                 result = f(*args, **kwargs)

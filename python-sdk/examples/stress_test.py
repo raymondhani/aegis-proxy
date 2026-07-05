@@ -3,6 +3,8 @@ import urllib.request
 import json
 import time
 import sys
+# Added for packaging consistency
+from aegis_sdk.neon_provisioner import safe_db_run
 
 def fetch_metrics():
     try:

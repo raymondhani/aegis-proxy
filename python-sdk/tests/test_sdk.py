@@ -1,6 +1,6 @@
 import sys
 import psycopg2
-from neon_provisioner import safe_db_run
+from aegis_sdk.neon_provisioner import safe_db_run
 
 @safe_db_run
 def test_successful_run(db_url: str):

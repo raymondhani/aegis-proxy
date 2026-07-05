@@ -287,7 +287,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 								slog.Error("Blocked destructive SQL query from client",
 									slog.String("session_id", sessionID),
 									slog.String("query", queryStr))
-								sendPgInsufficientPrivilegeError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
+								sendPgError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
 								errChan <- errors.New("destructive query blocked")
 								return
 							}

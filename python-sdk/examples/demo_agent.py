@@ -1,6 +1,6 @@
 import os
 import psycopg2
-from neon_provisioner import safe_db_run
+from aegis_sdk.neon_provisioner import safe_db_run
 
 def execute_sql(query: str):
     """

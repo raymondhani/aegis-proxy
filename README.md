@@ -86,6 +86,36 @@ Response format:
 
 ---
 
+## Python SDK: The `@safe_db_run` Decorator
+
+The Aegis Python SDK provides the `@safe_db_run` decorator to wrap database interaction logic for AI agents. This decorator automatically:
+1. Contacts the Neon API to dynamically provision an isolated, ephemeral database branch (Copy-on-Write).
+2. Sets up routing through the Aegis Proxy.
+3. Injects the secure proxy connection string containing the session ID.
+4. Cleans up and deletes the branch once the agent function finishes execution (either successfully or with errors).
+
+### Installation
+You can install the SDK in editable development mode from within the `python-sdk` directory:
+```bash
+cd python-sdk
+pip install -e .
+```
+
+Example usage:
+```python
+from aegis_sdk.neon_provisioner import safe_db_run
+import psycopg2
+
+@safe_db_run
+def my_ai_agent_tool(proxy_conn_string: str):
+    # The proxy_conn_string is automatically injected
+    conn = psycopg2.connect(proxy_conn_string)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users;")
+```
+
+---
+
 ## Secrets Management
 
 > [!WARNING]
