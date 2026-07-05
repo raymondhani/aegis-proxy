@@ -1,0 +1,52 @@
+name: Aegis CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-go-proxy:
+    name: Go Proxy Build check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download Go Dependencies
+        run: |
+          cd proxy-engine
+          go mod tidy
+
+      - name: Compile Go Proxy
+        run: |
+          cd proxy-engine
+          go build -o aegis-proxy main.go
+
+  test-python-sdk:
+    name: Python SDK Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          cd python-sdk
+          pip install requests psycopg2-binary
+
+      - name: Verify Python Code Compilation
+        run: |
+          cd python-sdk
+          python -m py_compile neon_provisioner.py test_sdk.py demo_agent.py

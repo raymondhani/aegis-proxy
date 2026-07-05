@@ -1,0 +1,50 @@
+# Aegis Monorepo Git Ignore
+
+# Local Environment Variables
+.env
+
+# Go Build Artifacts
+aegis-proxy.exe
+aegis-proxy
+proxy-engine/aegis-proxy
+proxy-engine/aegis-proxy.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Python Virtual Environments
+venv/
+.venv/
+ENV/
+env/
+ipython_log.py
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Logs
+*.log
+*.log.*
+logs/
+.system_generated/
+
+# Database Files
+*.db
+*.sqlite
+
+# IDE and Editor Configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
