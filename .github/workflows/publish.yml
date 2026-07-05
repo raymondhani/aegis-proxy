@@ -3,13 +3,13 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - 'v*' # Trigger only on version tags
+      - 'v*'
 
 jobs:
   pypi-publish:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # Required for PyPI Trusted Publishing
+      id-token: write 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,6 +18,10 @@ jobs:
       - name: Build and Publish
         run: |
           pip install build twine
+          # Navigate into the subdirectory to build
+          cd python-sdk
           python -m build
-          # The action automatically handles uploading to PyPI
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Tell the action where the build artifacts are
+          packages-dir: python-sdk/dist/
