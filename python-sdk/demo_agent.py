@@ -40,5 +40,16 @@ def run_agent_demo():
     except Exception as e:
         print(f"AEGIS PROXY BLOCKED MALICIOUS INTENT: {e}")
 
+    # 3. Execute idle timeout verification query
+    try:
+        print("\n--- Phase 3: Testing connection idle timeout ---")
+        print("Sleeping for 4 seconds to trigger proxy idle timeout (configured at 2s in test)...")
+        import time
+        time.sleep(4)
+        execute_sql("SELECT 1;")
+        print("[Agent] WARNING: Connection did not timeout!")
+    except Exception as e:
+        print(f"AEGIS PROXY TIMED OUT IDLE CONNECTION: {e}")
+
 if __name__ == "__main__":
     run_agent_demo()

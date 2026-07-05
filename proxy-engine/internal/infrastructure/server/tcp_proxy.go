@@ -11,19 +11,25 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	sqlparser "vitess.io/vitess/go/vt/sqlparser"
 )
 
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
 type TCPProxy struct {
-	useCase *usecase.SessionUseCase
-	mode    string
+	useCase     *usecase.SessionUseCase
+	mode        string
+	idleTimeout time.Duration
 }
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase, mode string) *TCPProxy {
-	return &TCPProxy{useCase: useCase, mode: mode}
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration) *TCPProxy {
+	return &TCPProxy{
+		useCase:     useCase,
+		mode:        mode,
+		idleTimeout: idleTimeout,
+	}
 }
 
 // Start runs the Layer 4 TCP Listener.
@@ -212,9 +218,13 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
 
-	// Client to Backend (Interception and Filtering)
+	// Client to Backend (Interception, Filtering, and Timeout)
 	go func() {
 		for {
+			// Apply read deadline to client read operations
+			if p.idleTimeout > 0 {
+				_ = clientConn.SetReadDeadline(time.Now().Add(p.idleTimeout))
+			}
 			t, packetBytes, err := readPgPacket(clientConn)
 			if err != nil {
 				errChan <- err
@@ -269,6 +279,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 				}
 			}
 
+			// Apply write deadline to backend write operations
+			if p.idleTimeout > 0 {
+				_ = backendConn.SetWriteDeadline(time.Now().Add(p.idleTimeout))
+			}
 			_, err = backendConn.Write(packetBytes)
 			if err != nil {
 				errChan <- err
@@ -277,10 +291,9 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		}
 	}()
 
-	// Backend to Client (Raw Copy for maximum performance)
+	// Backend to Client (Piping with Idle Timeout)
 	go func() {
-		_, err := io.Copy(clientConn, backendConn)
-		errChan <- err
+		copyWithTimeout(clientConn, backendConn, p.idleTimeout, errChan)
 	}()
 
 	err = <-errChan
@@ -540,4 +553,29 @@ func inspectQuery(queryStr string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// copyWithTimeout copies all bytes from src to dst, enforcing a read/write timeout.
+func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan chan error) {
+	buf := make([]byte, 32768)
+	for {
+		if timeout > 0 {
+			_ = src.SetReadDeadline(time.Now().Add(timeout))
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			if timeout > 0 {
+				_ = dst.SetWriteDeadline(time.Now().Add(timeout))
+			}
+			_, wErr := dst.Write(buf[:n])
+			if wErr != nil {
+				errChan <- wErr
+				return
+			}
+		}
+		if err != nil {
+			errChan <- err
+			return
+		}
+	}
 }
