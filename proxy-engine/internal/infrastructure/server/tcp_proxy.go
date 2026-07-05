@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 
@@ -18,11 +18,12 @@ import (
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
 type TCPProxy struct {
 	useCase *usecase.SessionUseCase
+	mode    string
 }
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase) *TCPProxy {
-	return &TCPProxy{useCase: useCase}
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string) *TCPProxy {
+	return &TCPProxy{useCase: useCase, mode: mode}
 }
 
 // Start runs the Layer 4 TCP Listener.
@@ -32,12 +33,12 @@ func (p *TCPProxy) Start(addr string) error {
 		return err
 	}
 	defer listener.Close()
-	log.Printf("[TCPProxy] Listening on %s\n", addr)
+	slog.Info("TCPProxy listening", slog.String("address", addr))
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("[TCPProxy] Error accepting connection: %v\n", err)
+			slog.Error("Error accepting connection", slog.Any("error", err))
 			continue
 		}
 		go p.handleConnection(conn)
@@ -46,13 +47,13 @@ func (p *TCPProxy) Start(addr string) error {
 
 func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
-	log.Printf("[TCPProxy] New client connection from %s\n", clientConn.RemoteAddr())
+	slog.Info("New client connection", slog.String("remote_address", clientConn.RemoteAddr().String()))
 
 	// Read initial 8 bytes of connection request.
 	header := make([]byte, 8)
 	_, err := io.ReadFull(clientConn, header)
 	if err != nil {
-		log.Printf("[TCPProxy] Error reading connection header: %v\n", err)
+		slog.Error("Error reading connection header", slog.Any("error", err))
 		return
 	}
 
@@ -63,11 +64,11 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	// SSLRequest code is 80877103. Length is 8.
 	if length == 8 && code == 80877103 {
-		log.Printf("[TCPProxy] Received SSLRequest. Refusing SSL to parse StartupMessage in plain text...\n")
+		slog.Info("Received SSLRequest, refusing SSL to parse StartupMessage in plain text")
 		// Write 'N' to decline SSL
 		_, err = clientConn.Write([]byte{'N'})
 		if err != nil {
-			log.Printf("[TCPProxy] Error writing SSL rejection: %v\n", err)
+			slog.Error("Error writing SSL rejection", slog.Any("error", err))
 			return
 		}
 
@@ -75,33 +76,33 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		startupHeader := make([]byte, 8)
 		_, err = io.ReadFull(clientConn, startupHeader)
 		if err != nil {
-			log.Printf("[TCPProxy] Error reading StartupMessage header: %v\n", err)
+			slog.Error("Error reading StartupMessage header", slog.Any("error", err))
 			return
 		}
 
 		len2 := binary.BigEndian.Uint32(startupHeader[0:4])
 		if len2 < 8 || len2 > 10000 {
-			log.Printf("[TCPProxy] Invalid StartupMessage length after SSL refusal: %d\n", len2)
+			slog.Error("Invalid StartupMessage length after SSL refusal", slog.Uint64("length", uint64(len2)))
 			return
 		}
 
 		rest := make([]byte, len2-8)
 		_, err = io.ReadFull(clientConn, rest)
 		if err != nil {
-			log.Printf("[TCPProxy] Error reading StartupMessage body: %v\n", err)
+			slog.Error("Error reading StartupMessage body", slog.Any("error", err))
 			return
 		}
 		startupData = append(startupHeader, rest...)
 	} else {
 		// Connection didn't start with SSLRequest; it began directly with StartupMessage.
 		if length < 8 || length > 10000 {
-			log.Printf("[TCPProxy] Invalid StartupMessage length: %d\n", length)
+			slog.Error("Invalid StartupMessage length", slog.Uint64("length", uint64(length)))
 			return
 		}
 		rest := make([]byte, length-8)
 		_, err = io.ReadFull(clientConn, rest)
 		if err != nil {
-			log.Printf("[TCPProxy] Error reading StartupMessage body: %v\n", err)
+			slog.Error("Error reading StartupMessage body", slog.Any("error", err))
 			return
 		}
 		startupData = append(header, rest...)
@@ -110,7 +111,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	// Parse the StartupMessage parameters
 	sm, err := parseStartupMessage(startupData)
 	if err != nil {
-		log.Printf("[TCPProxy] Error parsing StartupMessage: %v\n", err)
+		slog.Error("Error parsing StartupMessage", slog.Any("error", err))
 		sendPgError(clientConn, fmt.Sprintf("failed to parse startup message: %v", err))
 		return
 	}
@@ -118,23 +119,23 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	// Extract and remove the session ID from parameters
 	sessionID, ok := extractSessionId(sm)
 	if !ok {
-		log.Printf("[TCPProxy] Routing failed: No session_id found in connection parameters\n")
+		slog.Warn("Routing failed: No session_id found in connection parameters")
 		sendPgError(clientConn, "aegis session ID not found in connection parameters. Use dbname?session_id=UUID")
 		return
 	}
 
-	log.Printf("[TCPProxy] Extracted session ID: %s\n", sessionID)
+	slog.Info("Extracted session ID", slog.String("session_id", sessionID))
 
 	// Resolve dynamic backend target host
 	sess, err := p.useCase.GetSession(sessionID)
 	if err != nil {
-		log.Printf("[TCPProxy] Routing failed: Session %s not found in registry\n", sessionID)
+		slog.Warn("Routing failed: Session not found in registry", slog.String("session_id", sessionID))
 		sendPgError(clientConn, fmt.Sprintf("invalid or expired Aegis session ID: %s", sessionID))
 		return
 	}
 
 	targetHost := sess.TargetHost
-	log.Printf("[TCPProxy] Resolving target host for session %s -> %s\n", sessionID, targetHost)
+	slog.Info("Resolving target host for session", slog.String("session_id", sessionID), slog.String("target_host", targetHost))
 
 	// Neon endpoints enforce SSL. We must establish a secure TLS connection.
 	if !strings.Contains(targetHost, ":") {
@@ -149,10 +150,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		ServerName: hostOnly,
 	}
 
-	log.Printf("[TCPProxy] Connecting to Neon backend via TLS (%s, SNI: %s)...\n", targetHost, hostOnly)
+	slog.Info("Connecting to Neon backend via TLS", slog.String("session_id", sessionID), slog.String("target_host", targetHost), slog.String("sni", hostOnly))
 	backendConn, err := tls.Dial("tcp", targetHost, tlsConfig)
 	if err != nil {
-		log.Printf("[TCPProxy] Connection to Neon backend failed: %v\n", err)
+		slog.Error("Connection to Neon backend failed", slog.String("session_id", sessionID), slog.Any("error", err))
 		sendPgError(clientConn, fmt.Sprintf("failed to establish connection to backend database: %v", err))
 		return
 	}
@@ -162,7 +163,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	modifiedStartup := sm.serialize()
 	_, err = backendConn.Write(modifiedStartup)
 	if err != nil {
-		log.Printf("[TCPProxy] Error writing StartupMessage to backend: %v\n", err)
+		slog.Error("Error writing StartupMessage to backend", slog.String("session_id", sessionID), slog.Any("error", err))
 		return
 	}
 
@@ -171,18 +172,18 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	for {
 		t, packetBytes, err := readPgPacket(backendConn)
 		if err != nil {
-			log.Printf("[TCPProxy] Error reading backend packet: %v\n", err)
+			slog.Error("Error reading backend packet during auth phase", slog.String("session_id", sessionID), slog.Any("error", err))
 			return
 		}
 
 		if t == 'R' && len(packetBytes) >= 9 {
 			authType := binary.BigEndian.Uint32(packetBytes[5:9])
 			if authType == 10 { // AuthenticationSASL
-				log.Printf("[TCPProxy] Intercepted AuthenticationSASL. Filtering mechanisms...\n")
+				slog.Info("Intercepted AuthenticationSASL. Filtering mechanisms...", slog.String("session_id", sessionID))
 				modifiedPacket := rewriteSASLAuthPacket(packetBytes)
 				_, err = clientConn.Write(modifiedPacket)
 				if err != nil {
-					log.Printf("[TCPProxy] Error sending modified SASL packet to client: %v\n", err)
+					slog.Error("Error sending modified SASL packet to client", slog.String("session_id", sessionID), slog.Any("error", err))
 					return
 				}
 				break
@@ -192,7 +193,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		// Forward unmodified packet to client
 		_, err = clientConn.Write(packetBytes)
 		if err != nil {
-			log.Printf("[TCPProxy] Error forwarding packet to client: %v\n", err)
+			slog.Error("Error forwarding auth packet to client", slog.String("session_id", sessionID), slog.Any("error", err))
 			return
 		}
 
@@ -244,15 +245,25 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					isDestructive, err := inspectQuery(queryStr)
 					if err == nil {
 						if isDestructive {
-							log.Printf("[TCPProxy] Blocked destructive SQL query from client session %s: %s\n", sessionID, queryStr)
-							sendPgInsufficientPrivilegeError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
-							errChan <- errors.New("destructive query blocked")
-							return
+							if p.mode == "monitor" {
+								// Monitor mode: log warning, but do NOT block query
+								slog.Warn("SHADOW MODE: Would have blocked query",
+									slog.String("session_id", sessionID),
+									slog.String("query", queryStr))
+							} else {
+								// Enforce mode (default): log error and block query
+								slog.Error("Blocked destructive SQL query from client",
+									slog.String("session_id", sessionID),
+									slog.String("query", queryStr))
+								sendPgInsufficientPrivilegeError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
+								errChan <- errors.New("destructive query blocked")
+								return
+							}
 						}
 					} else {
 						// Suppress non-critical syntax error noise from proprietary PG syntax unsupported by Vitess
 						if !strings.Contains(strings.ToLower(err.Error()), "syntax error") {
-							log.Printf("[TCPProxy] Parser error on session %s: %v\n", sessionID, err)
+							slog.Warn("Parser error during query inspection", slog.String("session_id", sessionID), slog.Any("error", err))
 						}
 					}
 				}
@@ -274,9 +285,9 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	err = <-errChan
 	if err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-		log.Printf("[TCPProxy] Session %s connection closed: %v\n", sessionID, err)
+		slog.Error("Session connection closed with error", slog.String("session_id", sessionID), slog.Any("error", err))
 	} else {
-		log.Printf("[TCPProxy] Session %s connection closed cleanly\n", sessionID)
+		slog.Info("Session connection closed cleanly", slog.String("session_id", sessionID))
 	}
 }
 
@@ -475,7 +486,7 @@ func rewriteSASLAuthPacket(packet []byte) []byte {
 	data := buf.Bytes()
 	binary.BigEndian.PutUint32(data[1:5], uint32(len(data)-1))
 
-	log.Printf("[TCPProxy] Filtered SASL mechanisms from %v to %v\n", mechanisms, filtered)
+	slog.Info("Filtered SASL mechanisms", slog.Any("original", mechanisms), slog.Any("filtered", filtered))
 	return data
 }
 
@@ -504,29 +515,29 @@ func sendPgInsufficientPrivilegeError(conn net.Conn, message string) {
 }
 
 func inspectQuery(queryStr string) (bool, error) {
-    // 1. Instantiate parser as per go doc (func New(opts Options))
-    parser, err := sqlparser.New(sqlparser.Options{})
-    if err != nil {
-        return false, err
-    }
+	// 1. Instantiate parser as per go doc (func New(opts Options))
+	parser, err := sqlparser.New(sqlparser.Options{})
+	if err != nil {
+		return false, err
+	}
 
-    // 2. Parse using instance
-    stmt, err := parser.Parse(queryStr)
-    if err != nil {
-        return false, err
-    }
+	// 2. Parse using instance
+	stmt, err := parser.Parse(queryStr)
+	if err != nil {
+		return false, err
+	}
 
-    // 3. Type switch using verified AST types
-    switch s := stmt.(type) {
-    case *sqlparser.DropTable:
-        // verified DropTable type from go doc
-        if !s.IfExists {
-            return true, nil 
-        }
-    case *sqlparser.Delete:
-        // verified Delete type from go doc
-        return true, nil
-    }
+	// 3. Type switch using verified AST types
+	switch s := stmt.(type) {
+	case *sqlparser.DropTable:
+		// verified DropTable type from go doc
+		if !s.IfExists {
+			return true, nil
+		}
+	case *sqlparser.Delete:
+		// verified Delete type from go doc
+		return true, nil
+	}
 
-    return false, nil
+	return false, nil
 }

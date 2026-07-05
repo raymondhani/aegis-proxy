@@ -82,6 +82,19 @@ go build -o aegis-proxy
 ```
 The proxy will start a database connection interceptor on port `5433` and an admin control HTTP API on port `5434`.
 
+### Running with Docker & Monitor Mode
+You can build and run the Aegis Proxy in a Docker container. By default, the proxy operates in `enforce` mode (which actively blocks queries). Set the `AEGIS_MODE` environment variable to `monitor` to run in shadow mode (which logs warnings instead of blocking queries).
+
+Build the image:
+```bash
+docker build -t aegis-proxy .
+```
+
+Run the container in Monitor Mode:
+```bash
+docker run -d -p 5433:5433 -p 5434:5434 -e AEGIS_MODE=monitor aegis-proxy
+```
+
 ### Using the Python SDK
 Install the SDK dependencies:
 ```bash

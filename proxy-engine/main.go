@@ -4,20 +4,28 @@ import (
 	"aegis/proxy/internal/infrastructure/repository"
 	"aegis/proxy/internal/infrastructure/server"
 	"aegis/proxy/internal/usecase"
-	"log"
+	"log/slog"
 	"os"
 )
 
 func main() {
-	log.Println("Starting Aegis DB Proxy Engine...")
+	// Initialize structured JSON logging directed to stdout
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
+	slog.Info("Starting Aegis DB Proxy Engine...")
 
 	// Initialize clean architecture modules
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
 
-	// Set listening addresses (defaults can be overridden via environment variables)
+	// Set listening addresses and configuration mode
 	tcpAddr := ":5433"
 	httpAddr := ":5434"
+	mode := os.Getenv("AEGIS_MODE")
+	if mode == "" {
+		mode = "enforce" // Default to enforce mode
+	}
 
 	if port := os.Getenv("AEGIS_PROXY_TCP_PORT"); port != "" {
 		tcpAddr = ":" + port
@@ -27,18 +35,20 @@ func main() {
 	}
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
-	tcpProxy := server.NewTCPProxy(useCase)
+	tcpProxy := server.NewTCPProxy(useCase, mode)
 	go func() {
-		log.Printf("Starting DB connection interceptor on %s\n", tcpAddr)
+		slog.Info("Starting DB connection interceptor", slog.String("address", tcpAddr), slog.String("mode", mode))
 		if err := tcpProxy.Start(tcpAddr); err != nil {
-			log.Fatalf("Fatal error in TCP Proxy: %v", err)
+			slog.Error("Fatal error in TCP Proxy", slog.Any("error", err))
+			os.Exit(1)
 		}
 	}()
 
 	// 2. Start the HTTP admin registry server (blocking on main thread)
 	httpServer := server.NewHTTPServer(useCase)
-	log.Printf("Starting administration API server on %s\n", httpAddr)
+	slog.Info("Starting administration API server", slog.String("address", httpAddr))
 	if err := httpServer.Start(httpAddr); err != nil {
-		log.Fatalf("Fatal error in HTTP Server: %v", err)
+		slog.Error("Fatal error in HTTP Server", slog.Any("error", err))
+		os.Exit(1)
 	}
 }
