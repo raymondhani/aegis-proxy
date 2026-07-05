@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	sqlparser "vitess.io/vitess/go/vt/sqlparser"
@@ -21,14 +22,16 @@ type TCPProxy struct {
 	useCase     *usecase.SessionUseCase
 	mode        string
 	idleTimeout time.Duration
+	rateLimit   int
 }
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration) *TCPProxy {
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int) *TCPProxy {
 	return &TCPProxy{
 		useCase:     useCase,
 		mode:        mode,
 		idleTimeout: idleTimeout,
+		rateLimit:   rateLimit,
 	}
 }
 
@@ -52,7 +55,10 @@ func (p *TCPProxy) Start(addr string) error {
 }
 
 func (p *TCPProxy) handleConnection(clientConn net.Conn) {
+	IncrementConnections()
+	defer DecrementConnections()
 	defer clientConn.Close()
+
 	slog.Info("New client connection", slog.String("remote_address", clientConn.RemoteAddr().String()))
 
 	// Read initial 8 bytes of connection request.
@@ -217,8 +223,9 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
+	tb := newTokenBucket(p.rateLimit)
 
-	// Client to Backend (Interception, Filtering, and Timeout)
+	// Client to Backend (Interception, Filtering, Rate Limiting, and Timeout)
 	go func() {
 		for {
 			// Apply read deadline to client read operations
@@ -252,14 +259,29 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 				}
 
 				if queryStr != "" {
+					// 1. Enforce query rate limit
+					if !tb.allow() {
+						RecordQueryBlocked()
+						slog.Error("Query rate limit exceeded",
+							slog.String("session_id", sessionID),
+							slog.String("query", queryStr),
+							slog.Int("limit_per_min", p.rateLimit))
+						sendPgError(clientConn, "Aegis Proxy Error: Query rate limit exceeded. Connection terminated.")
+						errChan <- errors.New("rate limit exceeded")
+						return
+					}
+
+					// 2. Perform AST inspection
 					isDestructive, err := inspectQuery(queryStr)
 					if err == nil {
 						if isDestructive {
+							RecordQueryBlocked()
 							if p.mode == "monitor" {
 								// Monitor mode: log warning, but do NOT block query
 								slog.Warn("SHADOW MODE: Would have blocked query",
 									slog.String("session_id", sessionID),
 									slog.String("query", queryStr))
+								RecordQueryProcessed()
 							} else {
 								// Enforce mode (default): log error and block query
 								slog.Error("Blocked destructive SQL query from client",
@@ -269,12 +291,14 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 								errChan <- errors.New("destructive query blocked")
 								return
 							}
+						} else {
+							RecordQueryProcessed()
 						}
 					} else {
-						// Suppress non-critical syntax error noise from proprietary PG syntax unsupported by Vitess
-						if !strings.Contains(strings.ToLower(err.Error()), "syntax error") {
-							slog.Warn("Parser error during query inspection", slog.String("session_id", sessionID), slog.Any("error", err))
-						}
+						// Suppress all parser error noise (syntax errors / proprietary syntax)
+						// since Postgres itself handles syntax validation and returns errors to the client.
+						// Still count as query processed because it bypasses proxy block to the database.
+						RecordQueryProcessed()
 					}
 				}
 			}
@@ -578,4 +602,43 @@ func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan 
 			return
 		}
 	}
+}
+
+// tokenBucket implements a standard thread-safe Token Bucket rate limiter.
+type tokenBucket struct {
+	rate         float64 // tokens added per second
+	capacity     float64
+	tokens       float64
+	lastRefilled time.Time
+	mu           sync.Mutex
+}
+
+func newTokenBucket(limitPerMin int) *tokenBucket {
+	rate := float64(limitPerMin) / 60.0
+	return &tokenBucket{
+		rate:         rate,
+		capacity:     float64(limitPerMin),
+		tokens:       float64(limitPerMin),
+		lastRefilled: time.Now(),
+	}
+}
+
+func (tb *tokenBucket) allow() bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(tb.lastRefilled).Seconds()
+	tb.lastRefilled = now
+
+	tb.tokens += elapsed * tb.rate
+	if tb.tokens > tb.capacity {
+		tb.tokens = tb.capacity
+	}
+
+	if tb.tokens >= 1.0 {
+		tb.tokens -= 1.0
+		return true
+	}
+	return false
 }

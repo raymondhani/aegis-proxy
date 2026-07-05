@@ -6,6 +6,7 @@ import (
 	"aegis/proxy/internal/usecase"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -39,6 +40,17 @@ func main() {
 		idleTimeout = 15 * time.Second
 	}
 
+	// Read and parse query rate limiting configuration (queries per minute)
+	rateLimitStr := os.Getenv("AEGIS_RATE_LIMIT")
+	rateLimit := 100 // default to 100 queries per minute
+	if rateLimitStr != "" {
+		if val, err := strconv.Atoi(rateLimitStr); err == nil {
+			rateLimit = val
+		} else {
+			slog.Error("Invalid AEGIS_RATE_LIMIT, defaulting to 100", slog.String("value", rateLimitStr), slog.Any("error", err))
+		}
+	}
+
 	if port := os.Getenv("AEGIS_PROXY_TCP_PORT"); port != "" {
 		tcpAddr = ":" + port
 	}
@@ -47,9 +59,14 @@ func main() {
 	}
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
-	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout)
+	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit)
 	go func() {
-		slog.Info("Starting DB connection interceptor", slog.String("address", tcpAddr), slog.String("mode", mode), slog.Duration("idle_timeout", idleTimeout))
+		slog.Info("Starting DB connection interceptor",
+			slog.String("address", tcpAddr),
+			slog.String("mode", mode),
+			slog.Duration("idle_timeout", idleTimeout),
+			slog.Int("rate_limit_per_min", rateLimit),
+		)
 		if err := tcpProxy.Start(tcpAddr); err != nil {
 			slog.Error("Fatal error in TCP Proxy", slog.Any("error", err))
 			os.Exit(1)

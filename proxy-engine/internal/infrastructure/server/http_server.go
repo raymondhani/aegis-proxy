@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 // HTTPServer exposes the management endpoints for routing registrations.
@@ -29,6 +30,7 @@ func (s *HTTPServer) Start(addr string) error {
 	mux.HandleFunc("/register", s.handleRegister)
 	mux.HandleFunc("/unregister", s.handleUnregister)
 	mux.HandleFunc("/session/", s.handleSessionDelete) // For DELETE /session/{session_id}
+	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	return http.ListenAndServe(addr, mux)
 }
@@ -109,4 +111,23 @@ func (s *HTTPServer) handleSessionDelete(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "unregistered"})
+}
+
+func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// Load metrics atomically to prevent data races
+	metricsCopy := Metrics{
+		QueriesProcessed:  atomic.LoadInt64(&GlobalMetrics.QueriesProcessed),
+		QueriesBlocked:    atomic.LoadInt64(&GlobalMetrics.QueriesBlocked),
+		ActiveConnections: atomic.LoadInt64(&GlobalMetrics.ActiveConnections),
+	}
+
+	_ = json.NewEncoder(w).Encode(metricsCopy)
 }
