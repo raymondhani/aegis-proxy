@@ -41,12 +41,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install SDK and Test Dependencies
         run: |
           cd python-sdk
-          pip install requests psycopg2-binary
+          # Install the package in editable mode
+          pip install -e .
+          # Install test-specific requirements
+          pip install pytest langchain-community
 
-      - name: Verify Python Code Compilation
+      - name: Run SDK Tests
         run: |
           cd python-sdk
-          python -m py_compile neon_provisioner.py test_sdk.py demo_agent.py
+          # Run the test suite using pytest
+          pytest tests/
