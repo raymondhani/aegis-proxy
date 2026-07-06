@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,9 +23,9 @@ func main() {
 	useCase := usecase.NewSessionUseCase(repo)
 	jailRepo := repository.NewInMemoryJailRepository()
 
-	// Set listening addresses and configuration mode
-	tcpAddr := ":5433"
-	httpAddr := ":5434"
+	// Set listening addresses and configuration mode (bind to 0.0.0.0 for Docker compatibility)
+	tcpAddr := "0.0.0.0:5433"
+	httpAddr := "0.0.0.0:5434"
 	mode := os.Getenv("AEGIS_MODE")
 	if mode == "" {
 		mode = "enforce" // Default to enforce mode
@@ -59,10 +60,18 @@ func main() {
 	}
 
 	if port := os.Getenv("AEGIS_PROXY_TCP_PORT"); port != "" {
-		tcpAddr = ":" + port
+		if !strings.Contains(port, ":") {
+			tcpAddr = "0.0.0.0:" + port
+		} else {
+			tcpAddr = port
+		}
 	}
 	if port := os.Getenv("AEGIS_PROXY_HTTP_PORT"); port != "" {
-		httpAddr = ":" + port
+		if !strings.Contains(port, ":") {
+			httpAddr = "0.0.0.0:" + port
+		} else {
+			httpAddr = port
+		}
 	}
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
