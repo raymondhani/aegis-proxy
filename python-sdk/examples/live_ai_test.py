@@ -111,7 +111,7 @@ def run_adversarial_simulation(proxy_conn_string: str):
     except Exception as e:
         print(f"  [Phase 3] Connection rejected: {e}")
 
-    time.sleep(2)
+    time.sleep(1)
 
     # --- Phase 4: Jail Verification ---
     print("\n[Phase 4] Verifying jail enforcement...")
