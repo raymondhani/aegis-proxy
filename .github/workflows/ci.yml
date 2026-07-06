@@ -50,6 +50,9 @@ jobs:
           pip install pytest langchain-community
 
       - name: Run SDK Tests
+        env:
+          NEON_API_KEY: "dummy"
+          NEON_PROJECT_ID: "dummy"
         run: |
           cd python-sdk
           # Run the test suite using pytest
