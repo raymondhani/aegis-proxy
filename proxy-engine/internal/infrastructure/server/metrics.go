@@ -7,6 +7,8 @@ type Metrics struct {
 	QueriesProcessed  int64 `json:"queries_processed"`
 	QueriesBlocked    int64 `json:"queries_blocked"`
 	ActiveConnections int64 `json:"active_connections"`
+	SessionsJailed    int64 `json:"sessions_jailed"`
+	AnomaliesDetected int64 `json:"anomalies_detected"`
 }
 
 // GlobalMetrics is the shared instance of proxy metrics.
@@ -31,3 +33,14 @@ func IncrementConnections() {
 func DecrementConnections() {
 	atomic.AddInt64(&GlobalMetrics.ActiveConnections, -1)
 }
+
+// RecordSessionJailed increments the jailed session counter.
+func RecordSessionJailed() {
+	atomic.AddInt64(&GlobalMetrics.SessionsJailed, 1)
+}
+
+// RecordAnomalyDetected increments the anomaly detection counter.
+func RecordAnomalyDetected() {
+	atomic.AddInt64(&GlobalMetrics.AnomaliesDetected, 1)
+}
+

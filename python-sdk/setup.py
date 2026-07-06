@@ -8,6 +8,7 @@ setup(
         "psycopg2-binary",
         "requests",
         "langchain-community",
+        "sseclient-py",
     ],
     author="Raymond Hani",
     description="Aegis AI-Native DB Proxy Python SDK",

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"aegis/proxy/internal/domain"
 	"aegis/proxy/internal/usecase"
 	"bytes"
 	"crypto/tls"
@@ -23,15 +24,17 @@ type TCPProxy struct {
 	mode        string
 	idleTimeout time.Duration
 	rateLimit   int
+	jailRepo    domain.JailRepository
 }
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int) *TCPProxy {
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int, jailRepo domain.JailRepository) *TCPProxy {
 	return &TCPProxy{
 		useCase:     useCase,
 		mode:        mode,
 		idleTimeout: idleTimeout,
 		rateLimit:   rateLimit,
+		jailRepo:    jailRepo,
 	}
 }
 
@@ -259,6 +262,17 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 				}
 
 				if queryStr != "" {
+					// 0. Check jail blocklist FIRST (O(1) sync.Map lookup)
+					if p.jailRepo.IsJailed(sessionID) {
+						RecordQueryBlocked()
+						slog.Error("Query rejected: session is jailed",
+							slog.String("session_id", sessionID),
+							slog.String("query", queryStr))
+						sendPgError(clientConn, "Aegis Proxy Error: Session has been jailed due to anomalous behavior.")
+						errChan <- errors.New("session jailed")
+						return
+					}
+
 					// 1. Enforce query rate limit
 					if !tb.allow() {
 						RecordQueryBlocked()
@@ -273,6 +287,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 					// 2. Perform AST inspection
 					isDestructive, err := inspectQuery(queryStr)
+					blocked := false
 					if err == nil {
 						if isDestructive {
 							RecordQueryBlocked()
@@ -289,6 +304,15 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 									slog.String("query", queryStr))
 								sendPgError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
 								errChan <- errors.New("destructive query blocked")
+								
+								// Emit telemetry before returning
+								EmitQueryEvent(QueryEvent{
+									SessionID:   sessionID,
+									Fingerprint: FingerprintSQL(queryStr),
+									RawQuery:    queryStr,
+									Timestamp:   time.Now().UnixMilli(),
+									Blocked:     true,
+								})
 								return
 							}
 						} else {
@@ -300,6 +324,15 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 						// Still count as query processed because it bypasses proxy block to the database.
 						RecordQueryProcessed()
 					}
+
+					// Emit telemetry for processed queries (non-blocked)
+					EmitQueryEvent(QueryEvent{
+						SessionID:   sessionID,
+						Fingerprint: FingerprintSQL(queryStr),
+						RawQuery:    queryStr,
+						Timestamp:   time.Now().UnixMilli(),
+						Blocked:     blocked,
+					})
 				}
 			}
 

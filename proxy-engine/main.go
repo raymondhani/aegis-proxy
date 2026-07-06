@@ -20,6 +20,7 @@ func main() {
 	// Initialize clean architecture modules
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
+	jailRepo := repository.NewInMemoryJailRepository()
 
 	// Set listening addresses and configuration mode
 	tcpAddr := ":5433"
@@ -27,6 +28,12 @@ func main() {
 	mode := os.Getenv("AEGIS_MODE")
 	if mode == "" {
 		mode = "enforce" // Default to enforce mode
+	}
+
+	// Read jail enabled state
+	jailEnabled := os.Getenv("AEGIS_JAIL_ENABLED")
+	if jailEnabled == "" {
+		jailEnabled = "true"
 	}
 
 	// Read and parse connection idle timeout
@@ -59,13 +66,14 @@ func main() {
 	}
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
-	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit)
+	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit, jailRepo)
 	go func() {
 		slog.Info("Starting DB connection interceptor",
 			slog.String("address", tcpAddr),
 			slog.String("mode", mode),
 			slog.Duration("idle_timeout", idleTimeout),
 			slog.Int("rate_limit_per_min", rateLimit),
+			slog.String("jail_enabled", jailEnabled),
 		)
 		if err := tcpProxy.Start(tcpAddr); err != nil {
 			slog.Error("Fatal error in TCP Proxy", slog.Any("error", err))
@@ -74,7 +82,7 @@ func main() {
 	}()
 
 	// 2. Start the HTTP admin registry server (blocking on main thread)
-	httpServer := server.NewHTTPServer(useCase)
+	httpServer := server.NewHTTPServer(useCase, jailRepo)
 	slog.Info("Starting administration API server", slog.String("address", httpAddr))
 	if err := httpServer.Start(httpAddr); err != nil {
 		slog.Error("Fatal error in HTTP Server", slog.Any("error", err))

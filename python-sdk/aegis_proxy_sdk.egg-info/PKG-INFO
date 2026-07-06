@@ -8,6 +8,7 @@ Classifier: License :: OSI Approved :: MIT License
 Requires-Dist: psycopg2-binary
 Requires-Dist: requests
 Requires-Dist: langchain-community
+Requires-Dist: sseclient-py
 Dynamic: author
 Dynamic: classifier
 Dynamic: requires-dist

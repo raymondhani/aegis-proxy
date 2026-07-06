@@ -30,6 +30,8 @@ def load_env_from_root():
             break
         current_dir = parent_dir
 
+import threading
+
 # Initialize env variables
 load_env_from_root()
 
@@ -40,6 +42,10 @@ NEON_BASE_URL = os.environ.get("NEON_BASE_URL", "https://console.neon.tech/api/v
 PROXY_TCP_HOST = os.environ.get("AEGIS_PROXY_TCP_HOST", "localhost")
 PROXY_TCP_PORT = int(os.environ.get("AEGIS_PROXY_TCP_PORT", "5433"))
 PROXY_HTTP_URL = os.environ.get("AEGIS_PROXY_HTTP_URL", "http://localhost:5434")
+
+# Anomaly detector auto-start flag
+_detector_started = False
+_detector_lock = threading.Lock()
 
 class NeonProvisioner:
     """Manages ephemeral database branch provisioning and registration with Aegis Go Proxy."""
@@ -239,6 +245,18 @@ def safe_db_run(func=None, *, validation_rules=None):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
+            # Auto-start anomaly detector daemon (double-checked locking)
+            global _detector_started
+            if not _detector_started:
+                with _detector_lock:
+                    if not _detector_started:
+                        try:
+                            from aegis_sdk.anomaly_detector import start_detector
+                            start_detector()
+                            _detector_started = True
+                        except Exception as e:
+                            print(f"[Aegis SDK] Warning: Failed to start anomaly detector: {e}")
+
             prov = NeonProvisioner()
             branch_id = None
             session_id = str(uuid.uuid4())
@@ -298,7 +316,15 @@ def safe_db_run(func=None, *, validation_rules=None):
                     kwargs["proxy_conn_string"] = proxy_db_url
 
                 # 8. Run execution
-                result = f(*args, **kwargs)
+                try:
+                    result = f(*args, **kwargs)
+                except Exception as exec_err:
+                    # Check if this is a jail error from the proxy
+                    import psycopg2
+                    if isinstance(exec_err, psycopg2.OperationalError) and "jailed" in str(exec_err).lower():
+                        from aegis_sdk.exceptions import AegisJailError
+                        raise AegisJailError(session_id, str(exec_err)) from exec_err
+                    raise
 
                 # 9. Take schema snapshot after execution
                 after_snapshot = get_schema_snapshot(real_conn_uri)
