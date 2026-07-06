@@ -29,6 +29,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Python Build Artifacts
+dist/
+build/
+*.egg-info/
+
 # Logs
 *.log
 *.log.*
