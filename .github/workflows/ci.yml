@@ -32,6 +32,9 @@ jobs:
   test-python-sdk:
     name: Python SDK Verification
     runs-on: ubuntu-latest
+    env:
+      NEON_API_KEY: "dummy"
+      NEON_PROJECT_ID: "dummy"
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -50,9 +53,6 @@ jobs:
           pip install pytest langchain-community
 
       - name: Run SDK Tests
-        env:
-          NEON_API_KEY: "dummy"
-          NEON_PROJECT_ID: "dummy"
         run: |
           cd python-sdk
           # Run the test suite using pytest

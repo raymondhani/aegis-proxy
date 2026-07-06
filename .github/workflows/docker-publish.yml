@@ -25,5 +25,5 @@ jobs:
           context: .
           push: true
           tags: |
-            raymondhani/aegis-proxy:${{ github.ref_name }}
-            raymondhani/aegis-proxy:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:${{ github.ref_name }}
