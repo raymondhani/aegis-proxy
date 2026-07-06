@@ -1,5 +1,6 @@
 import sys
 import psycopg2
+import pytest
 from aegis_sdk.neon_provisioner import safe_db_run
 
 @safe_db_run
@@ -40,12 +41,12 @@ def test_successful_run(db_url: str):
         conn.close()
 
 @safe_db_run
-def test_missing_pk_run(db_url: str):
+def run_missing_pk_run(db_url: str):
     """
     Attempts to create a table without a primary key.
     This should be caught by the validate_has_primary_keys validation rule.
     """
-    print(f"\n[Test] Running test_missing_pk_run against proxy URL: {db_url}")
+    print(f"\n[Test] Running run_missing_pk_run against proxy URL: {db_url}")
     
     conn = psycopg2.connect(db_url)
     try:
@@ -62,6 +63,12 @@ def test_missing_pk_run(db_url: str):
     finally:
         conn.close()
 
+def test_missing_pk_run_raises_value_error():
+    """Pytest wrapper to assert that run_missing_pk_run raises ValueError."""
+    with pytest.raises(ValueError) as excinfo:
+        run_missing_pk_run()
+    assert "lack primary key constraints" in str(excinfo.value)
+
 if __name__ == "__main__":
     print("====================================================")
     print("Aegis DB Proxy SDK Integration Test Suite Starting...")
@@ -77,13 +84,13 @@ if __name__ == "__main__":
 
     # 2. Run schema violation path
     try:
-        test_missing_pk_run()
-        print("\n=> FAIL: test_missing_pk_run did not trigger validation error!")
+        run_missing_pk_run()
+        print("\n=> FAIL: run_missing_pk_run did not trigger validation error!")
         sys.exit(1)
     except ValueError as ve:
-        print(f"\n=> SUCCESS: test_missing_pk_run was blocked by validation as expected: {ve}")
+        print(f"\n=> SUCCESS: run_missing_pk_run was blocked by validation as expected: {ve}")
     except Exception as e:
-        print(f"\n=> FAIL: test_missing_pk_run threw wrong exception: {e}")
+        print(f"\n=> FAIL: run_missing_pk_run threw wrong exception: {e}")
         sys.exit(1)
 
     print("\n====================================================")
