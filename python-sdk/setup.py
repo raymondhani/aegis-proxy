@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aegis-proxy-sdk",
-    version="1.0.9",
+    version="1.0.10",
     packages=find_packages(),
     install_requires=[
         "psycopg2-binary",

@@ -4,6 +4,7 @@ import (
 	"aegis/proxy/internal/domain"
 	"aegis/proxy/internal/usecase"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -146,10 +147,12 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) handleJail(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 3 || parts[2] == "" {
+		log.Printf("DEBUG: Received jail request but session ID is missing")
 		http.Error(w, "session_id is required", http.StatusBadRequest)
 		return
 	}
 	sessionID := parts[2]
+	log.Printf("DEBUG: Received jail request for session ID: %s", sessionID)
 
 	if r.Method == http.MethodPost {
 		if err := s.jailRepo.Jail(sessionID); err != nil {
