@@ -173,6 +173,12 @@ class AnomalyDetector:
     def __init__(self):
         self.anomaly_threshold = float(os.environ.get("AEGIS_ANOMALY_THRESHOLD", "3.0"))
         self.novelty_threshold = float(os.environ.get("AEGIS_NOVELTY_THRESHOLD", "2.0"))
+        # Absolute burst threshold: fires when a single fingerprint dominates and
+        # stddev is 0 (only one unique fingerprint seen). Env-configurable.
+        self.burst_threshold = int(os.environ.get("AEGIS_BURST_THRESHOLD", "15"))
+        # Simplified novelty baseline: a fingerprint with frequency==1 is flagged as
+        # novel when the distribution mean exceeds this value. Env-configurable.
+        self.novelty_baseline = float(os.environ.get("AEGIS_NOVELTY_BASELINE", "5.0"))
         strike_limit = int(os.environ.get("AEGIS_STRIKE_LIMIT", "3"))
         strike_decay = float(os.environ.get("AEGIS_STRIKE_DECAY", "300"))
         cms_width = int(os.environ.get("AEGIS_CMS_WIDTH", "1024"))
@@ -254,9 +260,22 @@ class AnomalyDetector:
         else:
             z_score = 0.0
 
-        # Anomaly detection
-        frequency_anomaly = z_score > self.anomaly_threshold
-        novelty_anomaly = frequency <= 1 and mean > 0 and z_score < -self.novelty_threshold
+        # --- Frequency anomaly ---
+        # Primary path: z-score fires when multiple fingerprints create a valid distribution.
+        # Fallback path: when stddev==0 (single unique fingerprint dominates the window),
+        # the z-score is always 0 and can never trigger. We catch this with an absolute
+        # burst threshold so rapid-fire single-query attacks are still detected.
+        if stddev > 0:
+            frequency_anomaly = z_score > self.anomaly_threshold
+        else:
+            frequency_anomaly = frequency > self.burst_threshold
+
+        # --- Novelty anomaly ---
+        # Simplified: a fingerprint seen exactly once while the established mean is
+        # already significant is inherently novel. The previous z-score approach failed
+        # here because a dominant fingerprint skews the mean so high that the z-score
+        # for a novel query only reaches ~-1.0, well below the -2.0 threshold.
+        novelty_anomaly = frequency == 1 and mean > self.novelty_baseline
 
         if frequency_anomaly or novelty_anomaly:
             anomaly_type = "frequency" if frequency_anomaly else "novelty"
