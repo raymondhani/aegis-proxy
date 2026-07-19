@@ -178,7 +178,7 @@ class AnomalyDetector:
         cms_width = int(os.environ.get("AEGIS_CMS_WIDTH", "1024"))
         cms_depth = int(os.environ.get("AEGIS_CMS_DEPTH", "4"))
         window_buckets = int(os.environ.get("AEGIS_WINDOW_BUCKETS", "60"))
-        self.proxy_http_url = os.environ.get("AEGIS_PROXY_HTTP_URL", "http://localhost:5434")
+        self.proxy_http_url = os.environ.get("AEGIS_ADMIN_URL") or os.environ.get("AEGIS_PROXY_HTTP_URL") or "http://localhost:5434"
 
         self.cms = SlidingWindowCMS(width=cms_width, depth=cms_depth, window_buckets=window_buckets)
         self.strikes = StrikeTracker(max_strikes=strike_limit, decay_seconds=strike_decay)
@@ -197,14 +197,15 @@ class AnomalyDetector:
 
         Reconnects automatically on connection errors with a 2-second backoff.
         """
+        import requests
         url = f"{self.proxy_http_url}/telemetry/stream"
         while True:
             try:
-                req = urllib.request.Request(url)
-                req.add_header("Accept", "text/event-stream")
-                with urllib.request.urlopen(req) as response:
-                    for raw_line in response:
-                        line = raw_line.decode("utf-8", errors="replace").rstrip("\n\r")
+                res = requests.get(url, headers={"Accept": "text/event-stream"}, stream=True)
+                res.raise_for_status()
+                for line_bytes in res.iter_lines():
+                    if line_bytes:
+                        line = line_bytes.decode("utf-8", errors="replace").rstrip("\n\r")
                         if line.startswith("data: "):
                             data_str = line[len("data: "):]
                             try:
@@ -238,6 +239,7 @@ class AnomalyDetector:
         if not query or not session_id:
             return
 
+        print(f"[DAEMON] Processed query: {query} for session: {session_id}")
         fp = fingerprint_sql(query)
         now = time.time()
 
@@ -285,26 +287,29 @@ class AnomalyDetector:
                     }),
                     file=sys.stderr,
                 )
+                print(f"[DAEMON] Anomaly threshold breached! Triggering jail for session...")
                 self._jail_session(session_id)
 
     def _jail_session(self, session_id: str) -> None:
         """Send a jail request to the Go proxy for the given session."""
-        url = f"{self.proxy_http_url}/jail/{session_id}"
+        import requests
         try:
-            req = urllib.request.Request(url, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-                print(
-                    json.dumps({
-                        "level": "info",
-                        "msg": "jail request sent",
-                        "session_id": session_id,
-                        "response": body,
-                    }),
-                    file=sys.stderr,
-                )
+            url = f"{self.proxy_http_url}/jail/{session_id}"
+            response = requests.post(url, timeout=5)
+            print(f"[DAEMON] /jail POST responded with Status: {response.status_code}, Body: {response.text}")
+            response.raise_for_status()
+            body = response.text
+            print(
+                json.dumps({
+                    "level": "info",
+                    "msg": "jail request sent",
+                    "session_id": session_id,
+                    "response": body,
+                }),
+                file=sys.stderr,
+            )
         except Exception as e:
+            print(f"[BACKGROUND DAEMON ERROR] Failed to execute /jail POST request. Reason: {e}")
             print(
                 json.dumps({
                     "level": "error",

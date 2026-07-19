@@ -10,6 +10,8 @@ Phases:
   4. Jail Verification (confirm connection rejected)
   5. Jail Release (admin unjail + query resumes)
 """
+import os
+import requests
 import time
 import json
 import urllib.request
@@ -36,6 +38,14 @@ def unjail_session(session_id: str):
 @safe_db_run
 def run_adversarial_simulation(proxy_conn_string: str):
     """Execute the 5-phase adversarial attack simulation."""
+    print(f"\n[DEBUG] Admin URL is configured as: {os.environ.get('AEGIS_ADMIN_URL', 'NOT SET')}")
+    try:
+        print("[DEBUG] Attempting manual ping to proxy admin server...")
+        requests.get("http://localhost:5434/metrics", timeout=2)
+        print("[DEBUG] Proxy admin server is REACHABLE from Python!")
+    except Exception as e:
+        print(f"[DEBUG] Proxy admin server is UNREACHABLE: {e}")
+
     print("\n" + "=" * 60)
     print("AEGIS ANTIGRAVITY — Adversarial Attack Simulation")
     print("=" * 60)
@@ -50,9 +60,9 @@ def run_adversarial_simulation(proxy_conn_string: str):
         for i in range(20):
             cur.execute(f"SELECT * FROM test_users WHERE id = {i + 1};")
             time.sleep(0.1)  # Natural pacing
-        print("  [Phase 1] ✓ 20 baseline queries executed successfully")
+        print("  [Phase 1] [OK] 20 baseline queries executed successfully")
     except Exception as e:
-        print(f"  [Phase 1] ✗ Baseline failed: {e}")
+        print(f"  [Phase 1] [FAIL] Baseline failed: {e}")
     finally:
         cur.close()
         conn.close()
@@ -68,7 +78,7 @@ def run_adversarial_simulation(proxy_conn_string: str):
                 cur.execute(f"SELECT * FROM test_users WHERE id = {i + 100};")
             except Exception as e:
                 if "jailed" in str(e).lower():
-                    print(f"  [Phase 2] ⚠ Strike escalation detected at query {i + 1}: {e}")
+                    print(f"  [Phase 2] [WARN] Strike escalation detected at query {i + 1}: {e}")
                     strike_count += 1
                     break
                 # Re-establish connection if dropped
@@ -119,14 +129,14 @@ def run_adversarial_simulation(proxy_conn_string: str):
         conn = psycopg2.connect(proxy_conn_string)
         cur = conn.cursor()
         cur.execute("SELECT 1;")
-        print("  [Phase 4] ⚠ Query succeeded — session may not be jailed yet")
+        print("  [Phase 4] [WARN] Query succeeded — session may not be jailed yet")
         cur.close()
         conn.close()
     except AegisJailError as e:
-        print(f"  [Phase 4] ✓ Jail confirmed: {e}")
+        print(f"  [Phase 4] [OK] Jail confirmed: {e}")
     except Exception as e:
         if "jailed" in str(e).lower():
-            print(f"  [Phase 4] ✓ Jail confirmed via raw error: {e}")
+            print(f"  [Phase 4] [OK] Jail confirmed via raw error: {e}")
         else:
             print(f"  [Phase 4] Connection error (may indicate jail): {e}")
 
