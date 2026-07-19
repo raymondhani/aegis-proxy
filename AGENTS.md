@@ -1,6 +1,6 @@
 # AI Agent Developer Guide (AGENTS.md)
 
-This file contains machine-readable instructions, specifications, and architecture boundaries for AI agents and code generation assistants working in the Aegis repository. Follow these guidelines strictly to preserve code quality and project consistency.
+This file contains machine-readable instructions, specifications, and architecture boundaries for AI agents and code generation assistants working in the Aegis repository. Follow these guidelines strictly to preserve code quality, project consistency, and multi-agent stability.
 
 ---
 
@@ -10,6 +10,7 @@ This file contains machine-readable instructions, specifications, and architectu
 /
 ├── .env                  # Shared environment secrets (NEON_API_KEY, etc.)
 ├── README.md             # Developer setup instructions
+├── INTERNAL_NOTES.md     # Private runbook and test/deployment cycles
 ├── AGENTS.md             # Machine-readable instructions (this file)
 ├── go.work               # Go workspace configuration
 ├── proxy-engine/         # Go-based Layer 4 TCP & Control HTTP proxy
@@ -28,7 +29,16 @@ This file contains machine-readable instructions, specifications, and architectu
 
 ---
 
-## 2. Clean Architecture Boundaries (Go Proxy Engine)
+## 2. Multi-Agent Workflow Constraints
+
+When generating code for Aegis, agents must respect the concurrent multi-agent architecture:
+- **Sandbox Isolation:** Aegis serves multiple autonomous agents simultaneously. Never hardcode static states that could cause race conditions between agents.
+- **Ephemeral State:** Agents operate on Copy-on-Write branches provisioned by Neon. Do not write logic in the Go Proxy that assumes a single, static underlying database instance.
+- **Zero-Trust Security:** Treat all incoming SQL from the Python SDK as actively hostile. Rely on Z-Score anomaly detection and immediately invoke **The Guillotine** (TCP termination) upon detecting threats.
+
+---
+
+## 3. Clean Architecture Boundaries (Go Proxy Engine)
 
 Agents modifying the `proxy-engine` must respect the following directional dependency boundaries:
 
@@ -37,42 +47,42 @@ Agents modifying the `proxy-engine` must respect the following directional depen
 ```
 
 ### Layer Definitions
-1. **Domain (`internal/domain`)**:
-   * *Rules*: Must not import any other packages in `internal/`.
-   * *Contents*: Contains structs (e.g., `Session`) and interfaces (e.g., `SessionRepository`). No implementation details or external HTTP/TCP packages allowed.
-2. **Usecase (`internal/usecase`)**:
-   * *Rules*: May import `internal/domain`. Must not import `internal/infrastructure`.
-   * *Contents*: Orchestrates data transformations and domain entities (e.g., `SessionUseCase`). Performs business validations.
-3. **Infrastructure (`internal/infrastructure`)**:
-   * *Rules*: May import `internal/usecase` and `internal/domain`.
-   * *Contents*: Handles databases (`repository`), protocol parsing, networking, and server engines (`server`). All third-party libraries and driver specifics belong here.
+1. **Domain (`internal/domain`)**: Must not import any other packages in `internal/`. Contains structs and interfaces. No external HTTP/TCP packages allowed.
+2. **Usecase (`internal/usecase`)**: May import `internal/domain`. Must not import `internal/infrastructure`. Orchestrates business logic and anomaly detection validation.
+3. **Infrastructure (`internal/infrastructure`)**: May import `internal/usecase` and `internal/domain`. Handles databases, Go/Python bridging, protocol parsing, and server engines.
 
 ---
 
-## 3. Go Proxy Protocol Interception Details
+## 4. Go/Python Bridging & Protocol Interception Details
 
-Future agents maintaining `proxy-engine/internal/infrastructure/server/tcp_proxy.go` must adhere to these technical specifications:
-* **SSL Handshake**: Intercept connections before TLS/SSL. Check the first 8 bytes for an `SSLRequest` (code `80877103`). Respond with a single byte `N` to refuse SSL. This forces the Postgres driver to negotiate a plain TCP session.
-* **StartupMessage**: Parse keys and values from the initial StartupMessage packet. Locate the `session_id` by examining the direct keys `session_id`, `aegis_session_id`, or by extracting the query string `?session_id=...` from the `database` parameter.
-* **StartupMessage Mutation**: Strip any custom session parameters from the StartupMessage parameters map and set `database` back to its original name. Re-serialize the message with a recalculated 4-byte big-endian length prefix.
-* **Backend Dialing**: Establish a `crypto/tls` connection to the destination host. Set the `ServerName` parameter in `tls.Config` to the host part of the backend endpoint to preserve SNI-based routing (critical for Neon routing).
-* **Errors**: Write a PostgreSQL-compliant fatal packet (byte `'E'`, followed by length and NULL-terminated strings for fields `S` Severity, `C` SQLSTATE code `08006`, and `M` Message) to notify client drivers cleanly.
+Agents maintaining the TCP bridge (`proxy-engine/internal/infrastructure/server/tcp_proxy.go`) and the Python SDK must adhere to these bridging specifications:
+
+* **SSL Handshake Refusal**: The Python SDK will attempt SSL. The Go Proxy intercepts this before TLS/SSL. Check the first 8 bytes for an `SSLRequest` (code `80877103`). Respond with a single byte `N` to refuse SSL. This forces the Postgres driver in Python to negotiate a plain TCP session with the local Go Proxy.
+* **StartupMessage Bridging**: Parse the initial StartupMessage packet. Locate the `session_id` to identify which AI agent is connecting. Strip custom Aegis parameters, calculate the 4-byte big-endian length prefix, and rewrite the packet.
+* **Backend Dialing to Neon**: Establish a `crypto/tls` connection to the destination Neon host. Set the `ServerName` parameter in `tls.Config` to preserve SNI-based routing.
+* **The Guillotine (Termination)**: Upon detecting an anomaly via the AST parser, the Go Proxy must write a PostgreSQL-compliant fatal packet (`S` Severity, `C` SQLSTATE `08006`, `M` Message) and terminate the socket in <1ms.
 
 ---
 
-## 4. Python SDK Architecture Guidelines
+## 5. CI/CD Deployment Pipeline Directives
 
-* **Environment Handling**: Do not load secrets from hardcoded files. Use `load_env_from_root()` to find the monorepo `.env` file dynamically.
+Agents must NOT modify CI/CD workflows (`.github/workflows/docker-publish.yml` or `scripts/release.py`) without explicit user permission. If authorized, respect the following constraints:
+* **Continuous Integration**: Ensure all Go and Python tests pass before suggesting pipeline changes.
+* **Multi-Architecture**: Docker builds must support both ARM64 and AMD64 natively.
+* **Semantic Versioning**: The `scripts/release.py` enforces semantic versioning. Do not introduce arbitrary tags; rely on major, minor, and patch increments (e.g., `v1.0.11`).
+
+---
+
+## 6. Python SDK Guidelines
+
+* **Environment Handling**: Use `load_env_from_root()` to find `.env`. Never hardcode secrets.
 * **Neon Client**: Always issue requests with the Bearer authorization header.
-* **Activation Polling**: Compute endpoints take time to start. Always poll `GET /projects/{project_id}/endpoints/{endpoint_id}` until `current_state` becomes `active` (with a sensible 30s timeout) before returning control.
-* **Validation Rules**:
-  * Implement validations as callable objects/functions matching signature `rule_fn(db_url, before_snapshot, after_snapshot)`.
-  * If a validation fails, raise a `ValueError`.
-* **Cleanup Safety**: Always execute cleanups inside a `finally` block. You **MUST** delete the ephemeral branch from Neon and unregister the session from the Go Proxy, even if the decorated function or validation rule raises an exception.
+* **Activation Polling**: Poll `GET /projects/{project_id}/endpoints/{endpoint_id}` until active before returning control to the agent.
+* **Cleanup Safety**: Always execute cleanups inside a `finally` block to unregister the session and delete the ephemeral branch.
 
 ---
 
-## 5. Build and Test Commands
+## 7. Build and Test Commands
 
 ### Go Proxy build check
 ```bash
@@ -92,4 +102,3 @@ Ensure the Go Proxy is running on ports `5433` and `5434`, then execute:
 cd python-sdk
 venv\Scripts\python test_sdk.py
 ```
-This tests both success query routing and missing primary key rule violation rejections.

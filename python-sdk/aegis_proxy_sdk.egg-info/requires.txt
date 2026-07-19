@@ -1,4 +1,0 @@
-psycopg2-binary
-requests
-langchain-community
-sseclient-py

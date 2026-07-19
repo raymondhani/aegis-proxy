@@ -19,6 +19,7 @@ venv/
 .venv/
 ENV/
 env/
+v/
 ipython_log.py
 
 # Python Cache
