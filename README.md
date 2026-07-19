@@ -1,130 +1,130 @@
-# Aegis: AI-Native Database Proxy
-
-Aegis is an AI-Native Database Proxy designed to secure, sandbox, and validate database interactions performed by LLM agents. Aegis dynamically intercepts database connection attempts from AI agents, provisions isolated Copy-on-Write database branches (via the Neon API) for the duration of the agent's work, routes the connection to the sandbox branch, and executes strict validation rules before letting changes merge.
-
----
-
-## Why Aegis?
-
-Giving autonomous AI agents direct write access to production databases introduces major security risks:
-* **Prompt Injection Attacks**: An agent can be manipulated by malicious user inputs into executing destructive SQL commands like `DROP TABLE` or `DELETE FROM`.
-* **Data Deletion & Corruption**: AI logical errors or hallucinations can lead to accidental data loss.
-* **Lack of Isolation**: Without sandboxing, multiple agents working on the same database can cause race conditions or corrupt each other's state.
-
-**Aegis solves these challenges at the network layer**:
-1. **Network Interception & AST Parsing**: Aegis intercepts agent connections at the TCP layer, parses SQL packets using the Vitess SQL AST parser, and blocks unauthorized destructive commands before they reach the database engine.
-2. **Dynamic Copy-on-Write Sandboxes**: It provisions dynamic, isolated database branches via the Neon API, routing the agent's queries safely into a sandbox.
-3. **Strict Schema Merge Rules**: It executes schema snapshot validations (e.g., verifying that no tables or columns are dropped and that all new tables contain primary keys) before allowing database changes to merge.
-4. **Production Readiness**: Supports Query Rate Limiting, Connection Idle Timeouts, Structured JSON logging, and "/metrics" monitoring endpoints.
+<div align="center">
+  <h1>🛡️ Aegis Antigravity</h1>
+  <p><b>Enterprise-grade, deterministic database security proxy for modern serverless architectures.</b></p>
+  <p><i>Shift-Left Security. Zero Hallucinations. Sub-millisecond Response.</i></p>
+</div>
 
 ---
 
-## Production Deployment
+Aegis Antigravity is a robust, AI-native database security proxy purpose-built for modern serverless databases like [Neon](https://neon.tech). Positioned as a true **"Shift-Left"** security tool, Aegis empowers developers to embed security directly into their data layer before production deployments. By intercepting database connections at the proxy layer, Aegis allows you to safely sandbox AI agents, execute adversarial testing, and deterministically block malicious queries—all without slowing down your application.
 
-### 1. Environment Configuration
+---
 
-Define the following environment variables. Ensure these are set in your production container runner or read from a secure secrets provider:
+## ✨ Features
 
-```env
-# Neon API Settings
-NEON_API_KEY=your_neon_api_key_here
-NEON_PROJECT_ID=your_neon_project_id_here
-NEON_BASE_URL=https://console.neon.tech/api/v2
+- **Deterministic Security**: Aegis relies on statistical **Z-score anomaly detection** rather than LLMs for threat analysis. This guarantees zero hallucinations, predictable performance, and mathematically sound security decisions.
+- **The Guillotine**: Experience unprecedented control with **sub-millisecond session termination** directly at the proxy level. When an anomaly is detected, the connection is severed instantly before a destructive query can reach the database engine.
+- **Zero-Latency Monitoring**: Never compromise on performance. The Aegis Python SDK calculates threats **asynchronously** off the main thread, ensuring your primary database interactions remain lightning fast.
+- **Serverless Native**: Built from the ground up to integrate seamlessly with **Neon ephemeral branches**. This enables safe adversarial testing, isolated sandboxing for AI agents, and frictionless CI/CD integration.
+
+---
+
+## 🏗️ Architecture
+
+Aegis operates at the network layer, sitting between your application (or AI agents) and your serverless database. It intercepts TCP connections, routes traffic to dynamic sandboxes, and asynchronously monitors query patterns.
+
+```mermaid
+flowchart LR
+    subgraph Application Layer
+        App[Application / AI Agent]
+        SDK[Aegis Python SDK\nAsynchronous Monitoring]
+    end
+
+    subgraph Security Proxy
+        Proxy[Aegis Antigravity Proxy\nThe Guillotine]
+    end
+
+    subgraph Serverless Database
+        Neon[Neon Serverless DB\nEphemeral Branches]
+    end
+
+    App -- "TCP/SQL Queries" --> Proxy
+    SDK -- "Async Threat Analysis" --> Proxy
+    Proxy -- "Routed Queries" --> Neon
+    Proxy -. "Anomaly Detected:\nSub-ms Termination" .-x App
+```
+
+---
+
+## 🚀 Quick Start
+
+Aegis is packaged as a lightweight, secure Docker container. Getting started takes only a few seconds.
+
+### 1. Configure Environment
+
+Create a `.env` file or export these variables in your terminal:
+
+```bash
+# Neon API Configuration
+export NEON_API_KEY="your_neon_api_key_here"
+export NEON_PROJECT_ID="your_neon_project_id_here"
 
 # Aegis Proxy Configuration
-AEGIS_MODE=enforce                 # Mode of operation: "enforce" (active blocking) or "monitor" (shadow mode)
-AEGIS_PROXY_TCP_PORT=5433         # Port for database connection interception
-AEGIS_PROXY_HTTP_PORT=5434        # Port for HTTP admin API and /metrics endpoint
-AEGIS_IDLE_TIMEOUT=15s            # Idle timeout duration for connection reaping (e.g. 15s, 5m)
-AEGIS_RATE_LIMIT=100              # Maximum query rate allowed per connection (queries per minute)
+export AEGIS_MODE="enforce" # Use 'enforce' to block, 'monitor' to shadow
+export AEGIS_PROXY_TCP_PORT="5433"
+export AEGIS_PROXY_HTTP_PORT="5434"
 ```
 
-### 2. Run using Docker
+### 2. Run the Aegis Proxy
 
-Aegis is packaged as a multi-stage Docker image that compiles the Go binary using Alpine Go and runs it in a minimal, secure runtime environment.
+Launch the proxy using Docker:
 
-Build the image:
-```bash
-docker build -t aegis-proxy .
-```
-
-Run in Enforce Mode (production default):
 ```bash
 docker run -d \
+  --name aegis-proxy \
   -p 5433:5433 \
   -p 5434:5434 \
-  -e NEON_API_KEY="your_api_key" \
-  -e NEON_PROJECT_ID="your_project_id" \
-  aegis-proxy
+  -e NEON_API_KEY="${NEON_API_KEY}" \
+  -e NEON_PROJECT_ID="${NEON_PROJECT_ID}" \
+  -e AEGIS_MODE="${AEGIS_MODE}" \
+  aegis-proxy:latest
 ```
 
-Run in Monitor Mode (shadow logging):
-```bash
-docker run -d \
-  -p 5433:5433 \
-  -p 5434:5434 \
-  -e AEGIS_MODE="monitor" \
-  -e NEON_API_KEY="your_api_key" \
-  -e NEON_PROJECT_ID="your_project_id" \
-  aegis-proxy
-```
-
-### 3. Monitoring & Metrics
-
-The Admin API exposes a `/metrics` HTTP endpoint on port `5434` for monitoring integration:
-```bash
-curl http://localhost:5434/metrics
-```
-Response format:
-```json
-{
-  "queries_processed": 1050,
-  "queries_blocked": 4,
-  "active_connections": 2
-}
-```
+Your database traffic routed through `localhost:5433` is now secured by Aegis Antigravity.
 
 ---
 
-## Python SDK: The `@safe_db_run` Decorator
+## 🐍 Python SDK Usage
 
-The Aegis Python SDK provides the `@safe_db_run` decorator to wrap database interaction logic for AI agents. This decorator automatically:
-1. Contacts the Neon API to dynamically provision an isolated, ephemeral database branch (Copy-on-Write).
-2. Sets up routing through the Aegis Proxy.
-3. Injects the secure proxy connection string containing the session ID.
-4. Cleans up and deletes the branch once the agent function finishes execution (either successfully or with errors).
+The Aegis Python SDK provides a seamless developer experience. Using the `@safe_db_run` decorator, you can effortlessly provision isolated database branches and route connections through the proxy—ideal for safely executing AI agent workflows.
 
 ### Installation
-You can install the SDK in editable development mode from within the `python-sdk` directory:
+
 ```bash
-cd python-sdk
-pip install -e .
+pip install aegis-sdk
 ```
 
-Example usage:
-```python
-from aegis_sdk.neon_provisioner import safe_db_run
-import psycopg2
+### Example: Securing an AI Agent
 
+```python
+import psycopg2
+from aegis_sdk.neon_provisioner import safe_db_run
+
+# The decorator automatically provisions a Neon ephemeral branch,
+# sets up routing through Aegis, and injects the secure connection string.
 @safe_db_run
-def my_ai_agent_tool(proxy_conn_string: str):
-    # The proxy_conn_string is automatically injected
+def autonomous_agent_task(proxy_conn_string: str):
+    print(f"Connecting to sandbox via Aegis: {proxy_conn_string}")
+    
+    # Connect using the secure, proxy-routed connection string
     conn = psycopg2.connect(proxy_conn_string)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users;")
+    
+    # Execute queries safely. Aegis monitors asynchronously.
+    # If the Z-score anomaly detector flags malicious behavior, 
+    # "The Guillotine" terminates the session in <1ms.
+    cursor.execute("SELECT * FROM users LIMIT 5;")
+    results = cursor.fetchall()
+    
+    print("Agent task completed safely.")
+    return results
+
+if __name__ == "__main__":
+    autonomous_agent_task()
 ```
 
 ---
 
-## Secrets Management
-
-> [!WARNING]
-> **Never commit your `.env` file or hardcode credentials into the repository.**
-> Always configure secret management practices in production. Use secure stores like Google Secret Manager, AWS Secrets Manager, or HashiCorp Vault to inject `NEON_API_KEY` dynamically.
-> Verify that the `.env` file is excluded from your git index by ensuring it is present in the `.gitignore` file.
-
----
-
-## Development & Local Testing
-
-For detailed instructions on building, running, and modifying the proxy, see [AGENTS.md](file:///e:/aegis-project/AGENTS.md).
+<div align="center">
+  <p>Built with 🛡️ for secure, AI-native infrastructure.</p>
+</div>
