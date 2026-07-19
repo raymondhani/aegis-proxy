@@ -1,29 +1,169 @@
 name: Publish Docker Image
 
+# Triggers:
+#   1. Semver tag push  (e.g. v1.2.3)  → full publish with 'latest' promotion
+#   2. Pre-release tag  (e.g. v1.2.3-rc.1) → publish without touching 'latest'
+#   3. workflow_dispatch → manual dry-run build (no push) for smoke-testing
 on:
   push:
     tags:
+      # Capture ALL v-prefixed tags; the semver guard job below controls
+      # whether 'latest' is promoted and whether the build proceeds at all.
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build without pushing (smoke test)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
-  push_to_registry:
-    name: Push Docker image to Docker Hub
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Guard — enforce strict semantic versioning on the triggering tag.
+  # Stable semver: v1.2.3         → sets IS_STABLE=true  (promotes 'latest')
+  # Pre-release:   v1.2.3-rc.1   → sets IS_STABLE=false (no 'latest' update)
+  # Bad tag:       vfoo, v1, etc → job fails fast before any image is built
+  # ─────────────────────────────────────────────────────────────────────────
+  validate-tag:
+    name: Validate Semver Tag
     runs-on: ubuntu-latest
+    outputs:
+      is_stable: ${{ steps.check.outputs.is_stable }}
+      version:   ${{ steps.check.outputs.version }}
     steps:
-      - name: Check out the repo
+      - name: Check tag format
+        id: check
+        run: |
+          REF="${{ github.ref_name }}"
+
+          # workflow_dispatch has no tag — emit a sentinel and continue.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "is_stable=false" >> "$GITHUB_OUTPUT"
+            echo "version=dev"     >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Manual dispatch — skipping tag validation."
+            exit 0
+          fi
+
+          # Strict stable semver: vMAJOR.MINOR.PATCH (no suffix)
+          STABLE_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          # Valid pre-release: vMAJOR.MINOR.PATCH-<label> e.g. v1.2.3-rc.1
+          PRERELEASE_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+-[a-zA-Z0-9.]+$'
+
+          if [[ "$REF" =~ $STABLE_PATTERN ]]; then
+            echo "✅  Stable semver tag detected: $REF"
+            echo "is_stable=true"            >> "$GITHUB_OUTPUT"
+            echo "version=${REF#v}"          >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" =~ $PRERELEASE_PATTERN ]]; then
+            echo "🟡  Pre-release tag detected: $REF (latest will NOT be updated)"
+            echo "is_stable=false"           >> "$GITHUB_OUTPUT"
+            echo "version=${REF#v}"          >> "$GITHUB_OUTPUT"
+          else
+            echo "❌  Tag '$REF' does not conform to semver (vMAJOR.MINOR.PATCH[-pre])."
+            echo "    Aborting publish to prevent a malformed image tag on Docker Hub."
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Build & push multi-architecture Docker image
+  # ─────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Multi-Arch Image
+    runs-on: ubuntu-latest
+    needs: validate-tag
+
+    permissions:
+      contents: read      # checkout
+      packages: write     # push image attestation (SBOM / provenance)
+      id-token: write     # OIDC token for attestation signing
+
+    steps:
+      - name: Check out repository
         uses: actions/checkout@v4
 
+      # ── Multi-arch emulation ────────────────────────────────────────────
+      - name: Set up QEMU (cross-arch emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Use the latest BuildKit available
+          driver-opts: image=moby/buildkit:latest
+
+      # ── Registry authentication ─────────────────────────────────────────
       - name: Log in to Docker Hub
+        # Skip login on a dry-run dispatch so forks without secrets don't fail
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run == 'false' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # ── OCI image metadata & tags ───────────────────────────────────────
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy
+          # Tag rules:
+          #   • stable tag  (v1.2.3)       → image tags: 1.2.3, latest
+          #   • pre-release (v1.2.3-rc.1)  → image tags: 1.2.3-rc.1  (no latest)
+          #   • manual dispatch             → image tags: dev
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ needs.validate-tag.outputs.is_stable == 'true' }}
+            type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=Aegis Proxy
+            org.opencontainers.image.description=Layer-4 TCP proxy with ephemeral Neon branch management for safe database operations
+            org.opencontainers.image.vendor=Aegis Antigravity
+            org.opencontainers.image.licenses=MIT
+
+      # ── Multi-platform build & push ─────────────────────────────────────
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:${{ github.ref_name }}
+          platforms: linux/amd64,linux/arm64
+          # Push only when: (a) triggered by a tag push, OR (b) manual dispatch
+          # with dry_run=false. Default manual dispatch is dry_run=true (no push).
+          push: ${{ github.event_name == 'push' || inputs.dry_run == 'false' }}
+          tags:   ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Use GitHub Actions cache to speed up layer rebuilds
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          # Embed build provenance for supply-chain transparency
+          provenance: true
+          sbom:       true
+
+      # ── Post-push summary ───────────────────────────────────────────────
+      - name: Summarize published image
+        if: ${{ github.event_name == 'push' || inputs.dry_run == 'false' }}
+        run: |
+          echo "## 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** \`linux/amd64\`, \`linux/arm64\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull Commands" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Latest stable (Docker auto-selects the correct arch)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:latest" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Pin to this exact release" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy:${{ needs.validate-tag.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Pin to immutable digest (most reproducible)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ secrets.DOCKERHUB_USERNAME }}/aegis-proxy@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
