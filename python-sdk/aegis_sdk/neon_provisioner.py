@@ -137,7 +137,9 @@ class NeonProvisioner:
             "session_id": session_id,
             "target_host": target_host
         }
-        res = requests.post(url, json=payload, timeout=5)
+        token = os.getenv('AEGIS_ADMIN_TOKEN', '')
+        headers = {"Authorization": f"Bearer {token}"}
+        res = requests.post(url, json=payload, headers=headers, timeout=5)
         res.raise_for_status()
 
     def unregister_session(self, session_id: str):
@@ -147,7 +149,9 @@ class NeonProvisioner:
             "session_id": session_id
         }
         try:
-            res = requests.post(url, json=payload, timeout=5)
+            token = os.getenv('AEGIS_ADMIN_TOKEN', '')
+            headers = {"Authorization": f"Bearer {token}"}
+            res = requests.post(url, json=payload, headers=headers, timeout=5)
             res.raise_for_status()
         except Exception as e:
             print(f"[Neon SDK] Warning: Failed to unregister session {session_id} from Go Proxy: {e}")

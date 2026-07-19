@@ -14,9 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	sqlparser "vitess.io/vitess/go/vt/sqlparser"
 )
+
+var fallbackDestructiveRegex = regexp.MustCompile(`(?i)\b(DROP|DELETE|TRUNCATE|ALTER)\b`)
 
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
 type TCPProxy struct {
@@ -594,6 +597,9 @@ func inspectQuery(queryStr string) (bool, error) {
 	// 2. Parse using instance
 	stmt, err := parser.Parse(queryStr)
 	if err != nil {
+		if fallbackDestructiveRegex.MatchString(queryStr) {
+			return true, nil
+		}
 		return false, err
 	}
 
@@ -606,6 +612,12 @@ func inspectQuery(queryStr string) (bool, error) {
 		}
 	case *sqlparser.Delete:
 		// verified Delete type from go doc
+		return true, nil
+	case *sqlparser.TruncateTable:
+		return true, nil
+	case *sqlparser.AlterTable:
+		return true, nil
+	case *sqlparser.DropDatabase:
 		return true, nil
 	}
 

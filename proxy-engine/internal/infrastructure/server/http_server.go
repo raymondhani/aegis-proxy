@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -46,6 +47,12 @@ func (s *HTTPServer) Start(addr string) error {
 }
 
 func (s *HTTPServer) handleRegister(w http.ResponseWriter, r *http.Request) {
+	expectedToken := os.Getenv("AEGIS_ADMIN_TOKEN")
+	if expectedToken == "" || r.Header.Get("Authorization") != "Bearer "+expectedToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -73,6 +80,12 @@ func (s *HTTPServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleUnregister(w http.ResponseWriter, r *http.Request) {
+	expectedToken := os.Getenv("AEGIS_ADMIN_TOKEN")
+	if expectedToken == "" || r.Header.Get("Authorization") != "Bearer "+expectedToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
