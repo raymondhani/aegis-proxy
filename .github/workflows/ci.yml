@@ -35,6 +35,7 @@ jobs:
     env:
       NEON_API_KEY: "dummy"
       NEON_PROJECT_ID: "dummy"
+      AEGIS_JWT_SECRET: "dummy_jwt_secret_for_testing"
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
