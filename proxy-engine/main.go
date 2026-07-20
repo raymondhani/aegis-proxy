@@ -1,9 +1,11 @@
-package main
+﻿package main
 
 import (
+	"aegis/proxy/internal/infrastructure/observability"
 	"aegis/proxy/internal/infrastructure/repository"
 	"aegis/proxy/internal/infrastructure/server"
 	"aegis/proxy/internal/usecase"
+	"context"
 	"log/slog"
 	"os"
 	"strconv"
@@ -19,6 +21,22 @@ func main() {
 	slog.Info("Starting Aegis DB Proxy Engine...")
 
 	// Initialize clean architecture modules
+	// Initialize OpenTelemetry
+	ctx := context.Background()
+	shutdownOTel, err := observability.InitOTel(ctx)
+	if err != nil {
+		slog.Error("Failed to initialize OpenTelemetry", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := shutdownOTel(ctx); err != nil {
+			slog.Error("Error during OTel shutdown", slog.Any("error", err))
+		}
+	}()
+
+	// Start OpenTelemetry consumer for TelemetryBus
+	go server.StartOTelConsumer(ctx)
+
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
 	jailRepo := repository.NewInMemoryJailRepository()
@@ -98,3 +116,4 @@ func main() {
 		os.Exit(1)
 	}
 }
+
