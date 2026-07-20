@@ -3,6 +3,7 @@ module aegis/proxy
 go 1.26.4
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0

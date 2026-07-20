@@ -15,7 +15,9 @@ import (
 	"sync"
 	"time"
 	"regexp"
+	"os"
 
+	"github.com/golang-jwt/jwt/v5"
 	sqlparser "vitess.io/vitess/go/vt/sqlparser"
 )
 
@@ -134,11 +136,11 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	// Extract and remove the session ID from parameters
-	sessionID, ok := extractSessionId(sm)
-	if !ok {
-		slog.Warn("Routing failed: No session_id found in connection parameters")
-		sendPgError(clientConn, "aegis session ID not found in connection parameters. Use dbname?session_id=UUID")
+	// Extract and verify JWT to get session ID
+	sessionID, err := extractAndVerifyJWT(sm)
+	if err != nil {
+		slog.Warn("Routing failed: JWT validation failed", slog.Any("error", err))
+		sendPgError(clientConn, fmt.Sprintf("Aegis Proxy Error: Invalid Agent Identity JWT: %v", err))
 		return
 	}
 
@@ -414,28 +416,55 @@ func parseStartupMessage(data []byte) (*startupMessage, error) {
 	return &startupMessage{version: version, params: params}, nil
 }
 
-func extractSessionId(sm *startupMessage) (string, bool) {
+func extractAndVerifyJWT(sm *startupMessage) (string, error) {
+	var tokenString string
+
 	// 1. Direct param check
-	if val, ok := sm.params["session_id"]; ok {
-		delete(sm.params, "session_id")
-		return val, true
-	}
-	if val, ok := sm.params["aegis_session_id"]; ok {
-		delete(sm.params, "aegis_session_id")
-		return val, true
-	}
-	// 2. Database suffix check (e.g. database=neondb?session_id=UUID)
-	if dbName, ok := sm.params["database"]; ok {
-		if idx := strings.Index(dbName, "?session_id="); idx != -1 {
-			sessID := dbName[idx+len("?session_id="):]
-			if endIdx := strings.Index(sessID, "&"); endIdx != -1 {
-				sessID = sessID[:endIdx]
+	if val, ok := sm.params["aegis_jwt"]; ok {
+		tokenString = val
+		delete(sm.params, "aegis_jwt")
+	} else if val, ok := sm.params["jwt"]; ok {
+		tokenString = val
+		delete(sm.params, "jwt")
+	} else if dbName, ok := sm.params["database"]; ok {
+		// 2. Database suffix check (e.g. database=neondb?aegis_jwt=TOKEN)
+		if idx := strings.Index(dbName, "?aegis_jwt="); idx != -1 {
+			tokenString = dbName[idx+len("?aegis_jwt="):]
+			if endIdx := strings.Index(tokenString, "&"); endIdx != -1 {
+				tokenString = tokenString[:endIdx]
 			}
 			sm.params["database"] = dbName[:idx]
-			return sessID, true
 		}
 	}
-	return "", false
+
+	if tokenString == "" {
+		return "", errors.New("aegis_jwt not found in connection parameters")
+	}
+
+	secret := os.Getenv("AEGIS_JWT_SECRET")
+	if secret == "" {
+		return "", errors.New("AEGIS_JWT_SECRET environment variable is not set")
+	}
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(secret), nil
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to parse JWT: %v", err)
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		if sub, ok := claims["sub"].(string); ok {
+			return sub, nil
+		}
+		return "", errors.New("sub claim missing from JWT")
+	}
+
+	return "", errors.New("invalid JWT token")
 }
 
 func (sm *startupMessage) serialize() []byte {
