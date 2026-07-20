@@ -14,30 +14,29 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"regexp"
-
-	sqlparser "vitess.io/vitess/go/vt/sqlparser"
+	
 )
 
-var fallbackDestructiveRegex = regexp.MustCompile(`(?i)\b(DROP|DELETE|TRUNCATE|ALTER)\b`)
 
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
 type TCPProxy struct {
-	useCase     *usecase.SessionUseCase
-	mode        string
-	idleTimeout time.Duration
-	rateLimit   int
-	jailRepo    domain.JailRepository
+	useCase        *usecase.SessionUseCase
+	mode           string
+	idleTimeout    time.Duration
+	rateLimit      int
+	jailRepo       domain.JailRepository
+	queryInspector usecase.QueryInspector
 }
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int, jailRepo domain.JailRepository) *TCPProxy {
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int, jailRepo domain.JailRepository, queryInspector usecase.QueryInspector) *TCPProxy {
 	return &TCPProxy{
-		useCase:     useCase,
-		mode:        mode,
-		idleTimeout: idleTimeout,
-		rateLimit:   rateLimit,
-		jailRepo:    jailRepo,
+		useCase:        useCase,
+		mode:           mode,
+		idleTimeout:    idleTimeout,
+		rateLimit:      rateLimit,
+		jailRepo:       jailRepo,
+		queryInspector: queryInspector,
 	}
 }
 
@@ -289,7 +288,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					}
 
 					// 2. Perform AST inspection
-					isDestructive, err := inspectQuery(queryStr)
+					isDestructive, err := p.queryInspector.IsDestructive(queryStr)
 					blocked := false
 					if err == nil {
 						if isDestructive {
@@ -587,42 +586,6 @@ func sendPgInsufficientPrivilegeError(conn net.Conn, message string) {
 	_, _ = conn.Write(data)
 }
 
-func inspectQuery(queryStr string) (bool, error) {
-	// 1. Instantiate parser as per go doc (func New(opts Options))
-	parser, err := sqlparser.New(sqlparser.Options{})
-	if err != nil {
-		return false, err
-	}
-
-	// 2. Parse using instance
-	stmt, err := parser.Parse(queryStr)
-	if err != nil {
-		if fallbackDestructiveRegex.MatchString(queryStr) {
-			return true, nil
-		}
-		return false, err
-	}
-
-	// 3. Type switch using verified AST types
-	switch s := stmt.(type) {
-	case *sqlparser.DropTable:
-		// verified DropTable type from go doc
-		if !s.IfExists {
-			return true, nil
-		}
-	case *sqlparser.Delete:
-		// verified Delete type from go doc
-		return true, nil
-	case *sqlparser.TruncateTable:
-		return true, nil
-	case *sqlparser.AlterTable:
-		return true, nil
-	case *sqlparser.DropDatabase:
-		return true, nil
-	}
-
-	return false, nil
-}
 
 // copyWithTimeout copies all bytes from src to dst, enforcing a read/write timeout.
 func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan chan error) {
@@ -687,3 +650,4 @@ func (tb *tokenBucket) allow() bool {
 	}
 	return false
 }
+

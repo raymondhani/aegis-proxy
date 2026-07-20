@@ -2,16 +2,11 @@ module aegis/proxy
 
 go 1.26.4
 
-require vitess.io/vitess v0.24.2
+require github.com/wasilibs/go-pgquery v0.0.0-20260623022807-b68b28131ed3
 
 require (
-	github.com/golang/glog v1.2.5 // indirect
-	github.com/lmittmann/tint v1.1.3 // indirect
-	github.com/mattn/go-isatty v0.0.21 // indirect
-	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
-	google.golang.org/grpc v1.80.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	github.com/pganalyze/pg_query_go/v6 v6.2.2 // indirect
+	github.com/tetratelabs/wazero v1.12.0 // indirect
+	github.com/wasilibs/wazero-helpers v0.0.0-20250123031827-cd30c44769bb // indirect
+	golang.org/x/sys v0.44.0 // indirect
 )

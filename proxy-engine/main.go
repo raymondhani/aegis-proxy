@@ -75,7 +75,8 @@ func main() {
 	}
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
-	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit, jailRepo)
+	queryInspector := usecase.NewPGQueryInspector()
+	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit, jailRepo, queryInspector)
 	go func() {
 		slog.Info("Starting DB connection interceptor",
 			slog.String("address", tcpAddr),
