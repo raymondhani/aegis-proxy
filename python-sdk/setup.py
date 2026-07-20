@@ -9,6 +9,7 @@ setup(
         "requests",
         "langchain-community",
         "sseclient-py",
+        "PyJWT",
     ],
     author="Raymond Hani",
     description="Aegis AI-Native DB Proxy Python SDK",

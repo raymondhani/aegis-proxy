@@ -5,6 +5,8 @@ import urllib.parse
 from functools import wraps
 import requests
 import psycopg2
+import jwt
+from datetime import datetime, timedelta, timezone
 
 def load_env_from_root():
     """
@@ -270,6 +272,19 @@ def safe_db_run(func=None, *, validation_rules=None):
                 # 1. Provision branch
                 branch_id, endpoint_host = prov.provision_branch()
 
+                # Generate JWT
+                jwt_secret = os.environ.get("AEGIS_JWT_SECRET")
+                if not jwt_secret:
+                    raise ValueError("AEGIS_JWT_SECRET environment variable is missing.")
+                
+                jwt_payload = {
+                    "sub": session_id,
+                    "iat": datetime.now(timezone.utc),
+                    "exp": datetime.now(timezone.utc) + timedelta(hours=1)
+                }
+                aegis_jwt = jwt.encode(jwt_payload, jwt_secret, algorithm="HS256")
+
+
                 # 2. Get connection URI from Neon
                 real_conn_uri = prov.get_connection_uri(branch_id)
 
@@ -288,7 +303,7 @@ def safe_db_run(func=None, *, validation_rules=None):
 
                 # Append session_id query parameters inside the db name (unquoted path)
                 db_name = parsed.path.lstrip("/")
-                new_path = f"/{db_name}%3Fsession_id%3D{session_id}"
+                new_path = f"/{db_name}%3Faegis_jwt%3D{aegis_jwt}"
 
                 proxy_db_url = urllib.parse.urlunparse((
                     parsed.scheme,
@@ -300,7 +315,7 @@ def safe_db_run(func=None, *, validation_rules=None):
                 ))
 
                 print(f"[Neon SDK] Registered Session {session_id} with Aegis Proxy.")
-                print(f"[Neon SDK] Injecting proxy connection URL: postgresql://***:***@{PROXY_TCP_HOST}:{PROXY_TCP_PORT}/{db_name}?session_id={session_id}")
+                print(f"[Neon SDK] Injecting proxy connection URL: postgresql://***:***@{PROXY_TCP_HOST}:{PROXY_TCP_PORT}/{db_name}?aegis_jwt=***")
 
                 # 5. Take schema snapshot before execution
                 # Connect directly to the branch to capture snapshot (avoiding proxy overhead)
