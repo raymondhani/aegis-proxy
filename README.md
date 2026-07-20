@@ -18,7 +18,9 @@ Welcome to the Aegis project! This README serves as the ultimate onboarding guid
 
 Aegis is designed to support a **Multi-Agent Workflow** where several autonomous AI agents can operate simultaneously without cross-contamination. 
 - **Sandboxed Execution:** Every agent interaction is securely sandboxed in a dedicated Copy-on-Write (CoW) ephemeral branch provisioned via the Neon API.
-- **Z-Score Anomaly Detection:** Agents' queries are mathematically analyzed in real-time. If an agent hallucinates a destructive query (e.g., `DROP TABLE`), Aegis's Z-score engine detects it deterministically.
+- **Z-Score Anomaly Detection:** Agents' queries are mathematically analyzed in real-time using Native PostgreSQL AST parsing via `wasilibs/go-pgquery` (replacing Vitess). If an agent hallucinates a destructive query (e.g., `DROP TABLE`), Aegis's Z-score engine detects it deterministically.
+- **Cryptographic Agent Identity:** Agents are identified using signed JWTs (replacing raw session IDs) for secure, tamper-proof authentication.
+- **Advanced Threat Telemetry:** Zero-latency monitoring is powered by OpenTelemetry, providing deep insights into agent behavior.
 - **The Guillotine:** Once a threat is detected, the proxy severs the TCP connection in sub-milliseconds, neutralizing the agent's database access instantly.
 
 ---
@@ -81,6 +83,7 @@ export NEON_PROJECT_ID="your_neon_project_id_here"
 export AEGIS_MODE="enforce" # 'enforce' (blocks) or 'monitor' (shadows)
 export AEGIS_PROXY_TCP_PORT="5433"
 export AEGIS_PROXY_HTTP_PORT="5434"
+export AEGIS_JWT_SECRET="your_jwt_secret_here"
 ```
 
 ### 2. Run the Go Proxy (Docker)
@@ -93,6 +96,7 @@ docker run -d \
   -e NEON_API_KEY="${NEON_API_KEY}" \
   -e NEON_PROJECT_ID="${NEON_PROJECT_ID}" \
   -e AEGIS_MODE="${AEGIS_MODE}" \
+  -e AEGIS_JWT_SECRET="${AEGIS_JWT_SECRET}" \
   raymondartin2/aegis-proxy:latest
 ```
 

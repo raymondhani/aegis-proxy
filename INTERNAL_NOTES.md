@@ -21,6 +21,7 @@ docker run -d --name aegis-live -p 5433:5433 -p 5434:5434 ^
   -e AEGIS_MODE="monitor" ^
   -e AEGIS_RATE_LIMIT="100" ^
   -e DB_URL="postgresql://neondb_owner:npg_xQqflBJc27Li@ep-damp-paper-adv2rbtz.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require" ^
+  -e AEGIS_JWT_SECRET="dev_secret_key" ^
   raymondartin2/aegis-proxy:dev
 
 # 4. Execute the Python SDK Agents
@@ -51,17 +52,18 @@ docker push raymondartin2/aegis-proxy:latest
 When spawning a new AI coding assistant to work on Aegis, *paste this into the new AI session to instantly restore context for future work:*
 
 > **Project Context: Aegis AI-Native Database Proxy**
-> I am Raymond, the lead developer of Aegis, an open-source Layer-4 TCP database proxy written in Go (Clean Architecture, Domain-Driven Design). It intercepts Postgres connections from AI agents, provisions Copy-on-Write sandbox branches via the Neon API, and parses SQL using the Vitess AST parser to block destructive queries (e.g., DROP TABLE). 
+> I am Raymond, the lead developer of Aegis, an open-source Layer-4 TCP database proxy written in Go (Clean Architecture, Domain-Driven Design). It intercepts Postgres connections from AI agents, provisions Copy-on-Write sandbox branches via the Neon API, and parses SQL natively using `wasilibs/go-pgquery` to block destructive queries (e.g., DROP TABLE).
 > 
 > **Architecture Rules:**
 > - **Multi-Agent Isolation:** Every agent gets a dedicated sandbox.
+> - **Cryptographic Agent Identity:** Uses signed JWTs for authentication (no raw session IDs).
 > - **Go/Python Bridging:** Python SDK communicates to the Go proxy over TCP. The Proxy terminates SSL and renegotiates it with the DB.
 > - **CI/CD:** Multi-arch docker builds and strict Semantic Versioning.
 > 
 > **Current State:**
 > - The Go proxy and Python SDK are fully functional.
 > - We have implemented Rate Limiting (Token Bucket), Connection Idle Timeouts, and a structured JSON logger (`log/slog`).
-> - The proxy exposes a `/metrics` HTTP endpoint tracking processed/blocked queries.
+> - The proxy features Advanced Threat Telemetry via OpenTelemetry (zero latency) and exposes a `/metrics` HTTP endpoint tracking processed/blocked queries.
 > - It is containerized and deployed as `raymondartin2/aegis-proxy:latest` on Docker Hub.
 > 
 > **Goal for today:** I want to begin the next phase of the project. Please ask me what I want to focus on first.
@@ -91,6 +93,7 @@ To package and upload the `aegis-sdk` to PyPI, follow these steps:
 **Mandatory:**
 * `DB_URL`: The direct connection string to the Postgres/Neon database.
 * `AEGIS_MODE`: `"enforce"` (actively blocks bad queries) or `"monitor"` (logs warnings but lets them pass).
+* `AEGIS_JWT_SECRET`: The secret key used to sign and verify Agent Identity JWTs.
 
 **Optional:**
 * `AEGIS_RATE_LIMIT`: Max queries allowed per minute per session. (Default: 100)
