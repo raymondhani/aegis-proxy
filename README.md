@@ -103,7 +103,7 @@ The open-source proxy is designed for local development and single-node sandboxi
 - **Distributed State:** Redis-backed rate limiting for High Availability (HA) clusters.
 - **SIEM Exporters:** Batches and streams anomaly events directly to Datadog and Splunk.
 
-*Need production-grade guardrails for your AI agents? Contact our enterprise team at **sales@languaza.net** to schedule a technical architecture review.*
+*Need production-grade guardrails for your AI agents? Contact our enterprise team at **aegis@languaza.net** to schedule a technical architecture review.*
 
 ---
 
