@@ -56,4 +56,6 @@ logs/
 *~
 
 # Private Internal Documentation
+.env
 INTERNAL_NOTES.md
+*.private.md

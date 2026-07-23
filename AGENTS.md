@@ -10,7 +10,6 @@ This file contains machine-readable instructions, specifications, and architectu
 /
 ├── .env                  # Shared environment secrets (NEON_API_KEY, etc.)
 ├── README.md             # Developer setup instructions
-├── INTERNAL_NOTES.md     # Private runbook and test/deployment cycles
 ├── AGENTS.md             # Machine-readable instructions (this file)
 ├── go.work               # Go workspace configuration
 ├── proxy-engine/         # Go-based Layer 4 TCP & Control HTTP proxy
