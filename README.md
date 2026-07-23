@@ -96,13 +96,14 @@ docker-compose up -d
 ---
 
 ## 🏢 Aegis Enterprise Edition
-The open-source proxy is designed for local development and single-node sandboxing. For production-scale teams, **Aegis Enterprise (Tier 3)** offers:
+The open-source proxy is designed for local development and single-node sandboxing. For production-scale teams, **Aegis Enterprise (Tier 3)** is commercially backed by **Languaza Software** and offers:
+
 - **eBPF Kernel Acceleration:** Drops malicious packets at the Linux XDP layer for absolute zero-latency execution.
 - **Cryptographic Identity Validation:** Verifies JWTs against cached JWKS to prevent API key sharing.
 - **Distributed State:** Redis-backed rate limiting for High Availability (HA) clusters.
 - **SIEM Exporters:** Batches and streams anomaly events directly to Datadog and Splunk.
 
-*Need production-grade guardrails? [Join the Aegis Enterprise Waitlist](#) or open an issue to contact the founders.*
+*Need production-grade guardrails for your AI agents? Contact our enterprise team at **sales@languaza.net** to schedule a technical architecture review.*
 
 ---
 
