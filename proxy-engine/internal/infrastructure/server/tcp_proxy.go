@@ -20,27 +20,51 @@ import (
 )
 
 
+// Authenticator defines the interface for verifying agent identities.
+type Authenticator interface {
+	Authenticate(sm *StartupMessage) (string, error)
+}
+
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
 type TCPProxy struct {
-	useCase        *usecase.SessionUseCase
-	mode           string
-	idleTimeout    time.Duration
-	rateLimit      int
-	jailRepo       domain.JailRepository
-	queryInspector usecase.QueryInspector
+	useCase         *usecase.SessionUseCase
+	mode            string
+	idleTimeout     time.Duration
+	rateLimit       int
+	jailRepo        domain.JailRepository
+	queryInspector  usecase.QueryInspector
+	authenticator   Authenticator
+	policyValidator usecase.PolicyValidator
 }
+
+// DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
+type DefaultJWTAuthenticator struct{}
 
 // NewTCPProxy instantiates a TCPProxy.
 func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int, jailRepo domain.JailRepository, queryInspector usecase.QueryInspector) *TCPProxy {
 	return &TCPProxy{
-		useCase:        useCase,
-		mode:           mode,
-		idleTimeout:    idleTimeout,
-		rateLimit:      rateLimit,
-		jailRepo:       jailRepo,
-		queryInspector: queryInspector,
+		useCase:         useCase,
+		mode:            mode,
+		idleTimeout:     idleTimeout,
+		rateLimit:       rateLimit,
+		jailRepo:        jailRepo,
+		queryInspector:  queryInspector,
+		authenticator:   &DefaultJWTAuthenticator{},
+		policyValidator: nil, // Optional: injected via Enterprise Guardrail
 	}
 }
+
+// WithAuthenticator injects a custom authenticator (Tier 3)
+func (p *TCPProxy) WithAuthenticator(auth Authenticator) {
+	p.authenticator = auth
+}
+
+// WithPolicyValidator injects a custom policy validator (Tier 3)
+func (p *TCPProxy) WithPolicyValidator(validator usecase.PolicyValidator) {
+	p.policyValidator = validator
+}
+
+
 
 // Start runs the Layer 4 TCP Listener.
 func (p *TCPProxy) Start(addr string) error {
@@ -135,11 +159,11 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	// Extract and verify JWT to get session ID
-	sessionID, err := extractAndVerifyJWT(sm)
+	// Extract and verify JWT to get session ID using injected Authenticator
+	sessionID, err := p.authenticator.Authenticate(sm)
 	if err != nil {
-		slog.Warn("Routing failed: JWT validation failed", slog.Any("error", err))
-		sendPgError(clientConn, fmt.Sprintf("Aegis Proxy Error: Invalid Agent Identity JWT: %v", err))
+		slog.Warn("Routing failed: Authentication failed", slog.Any("error", err))
+		sendPgError(clientConn, fmt.Sprintf("Aegis Proxy Error: Invalid Agent Identity: %v", err))
 		return
 	}
 
@@ -294,22 +318,21 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					blocked := false
 					if err == nil {
 						if isDestructive {
+							blocked = true
 							RecordQueryBlocked()
 							if p.mode == "monitor" {
-								// Monitor mode: log warning, but do NOT block query
 								slog.Warn("SHADOW MODE: Would have blocked query",
 									slog.String("session_id", sessionID),
 									slog.String("query", queryStr))
 								RecordQueryProcessed()
+								blocked = false
 							} else {
-								// Enforce mode (default): log error and block query
 								slog.Error("Blocked destructive SQL query from client",
 									slog.String("session_id", sessionID),
 									slog.String("query", queryStr))
 								sendPgError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
 								errChan <- errors.New("destructive query blocked")
 								
-								// Emit telemetry before returning
 								EmitQueryEvent(QueryEvent{
 									SessionID:   sessionID,
 									Fingerprint: FingerprintSQL(queryStr),
@@ -319,13 +342,33 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 								})
 								return
 							}
-						} else {
-							RecordQueryProcessed()
 						}
-					} else {
-						// Suppress all parser error noise (syntax errors / proprietary syntax)
-						// since Postgres itself handles syntax validation and returns errors to the client.
-						// Still count as query processed because it bypasses proxy block to the database.
+					}
+
+					// 3. Optional Enterprise Policy Validation (RBAC)
+					if !blocked && p.policyValidator != nil {
+						allowed, pErr := p.policyValidator.Validate(queryStr, sessionID)
+						if pErr != nil || !allowed {
+							blocked = true
+							RecordQueryBlocked()
+							slog.Error("Blocked query due to enterprise policy violation",
+								slog.String("session_id", sessionID),
+								slog.String("query", queryStr))
+							sendPgError(clientConn, "Aegis Proxy Error: Query blocked by Enterprise RBAC Policy.")
+							errChan <- errors.New("policy violation")
+							
+							EmitQueryEvent(QueryEvent{
+								SessionID:   sessionID,
+								Fingerprint: FingerprintSQL(queryStr),
+								RawQuery:    queryStr,
+								Timestamp:   time.Now().UnixMilli(),
+								Blocked:     true,
+							})
+							return
+						}
+					}
+					
+					if !blocked {
 						RecordQueryProcessed()
 					}
 
@@ -365,13 +408,13 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	}
 }
 
-// startupMessage represents PG 3.0 protocol StartupMessage details.
-type startupMessage struct {
-	version int32
-	params  map[string]string
+// StartupMessage represents PG 3.0 protocol StartupMessage details.
+type StartupMessage struct {
+	Version int32
+	Params  map[string]string
 }
 
-func parseStartupMessage(data []byte) (*startupMessage, error) {
+func parseStartupMessage(data []byte) (*StartupMessage, error) {
 	if len(data) < 8 {
 		return nil, errors.New("data too short")
 	}
@@ -412,27 +455,27 @@ func parseStartupMessage(data []byte) (*startupMessage, error) {
 
 		params[key] = val
 	}
-	return &startupMessage{version: version, params: params}, nil
+	return &StartupMessage{Version: version, Params: params}, nil
 }
 
-func extractAndVerifyJWT(sm *startupMessage) (string, error) {
+func (a *DefaultJWTAuthenticator) Authenticate(sm *StartupMessage) (string, error) {
 	var tokenString string
 
 	// 1. Direct param check
-	if val, ok := sm.params["aegis_jwt"]; ok {
+	if val, ok := sm.Params["aegis_jwt"]; ok {
 		tokenString = val
-		delete(sm.params, "aegis_jwt")
-	} else if val, ok := sm.params["jwt"]; ok {
+		delete(sm.Params, "aegis_jwt")
+	} else if val, ok := sm.Params["jwt"]; ok {
 		tokenString = val
-		delete(sm.params, "jwt")
-	} else if dbName, ok := sm.params["database"]; ok {
+		delete(sm.Params, "jwt")
+	} else if dbName, ok := sm.Params["database"]; ok {
 		// 2. Database suffix check (e.g. database=neondb?aegis_jwt=TOKEN)
 		if idx := strings.Index(dbName, "?aegis_jwt="); idx != -1 {
 			tokenString = dbName[idx+len("?aegis_jwt="):]
 			if endIdx := strings.Index(tokenString, "&"); endIdx != -1 {
 				tokenString = tokenString[:endIdx]
 			}
-			sm.params["database"] = dbName[:idx]
+			sm.Params["database"] = dbName[:idx]
 		}
 	}
 
@@ -466,15 +509,15 @@ func extractAndVerifyJWT(sm *startupMessage) (string, error) {
 	return "", errors.New("invalid JWT token")
 }
 
-func (sm *startupMessage) serialize() []byte {
+func (sm *StartupMessage) serialize() []byte {
 	var buf bytes.Buffer
 	buf.Write([]byte{0, 0, 0, 0}) // placeholder for length
 
 	var verBuf [4]byte
-	binary.BigEndian.PutUint32(verBuf[:], uint32(sm.version))
+	binary.BigEndian.PutUint32(verBuf[:], uint32(sm.Version))
 	buf.Write(verBuf[:])
 
-	for k, v := range sm.params {
+	for k, v := range sm.Params {
 		buf.WriteString(k)
 		buf.WriteByte(0)
 		buf.WriteString(v)

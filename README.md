@@ -1,16 +1,32 @@
 <div align="center">
-  <h1>🛡️ Aegis Antigravity</h1>
+  <h1>🛡️ Aegis Security Proxy</h1>
   <p><b>Enterprise-grade, deterministic database security proxy for modern serverless architectures.</b></p>
   <p><i>Shift-Left Security. Zero Hallucinations. Sub-millisecond Response.</i></p>
 </div>
 
 ---
 
-Aegis Antigravity is a robust, AI-native database security proxy purpose-built for modern serverless databases like [Neon](https://neon.tech). Positioned as a true **"Shift-Left"** security tool, Aegis empowers developers to embed security directly into their data layer before production deployments. By intercepting database connections at the proxy layer, Aegis allows you to safely sandbox AI agents, execute adversarial testing, and deterministically block malicious queries—all without slowing down your application.
+Aegis is a robust, AI-native database security proxy purpose-built for modern serverless databases like [Neon](https://neon.tech). Positioned as a true **"Shift-Left"** security tool, Aegis empowers developers to embed security directly into their data layer before production deployments. By intercepting database connections at the proxy layer, Aegis allows you to safely sandbox AI agents, execute adversarial testing, and deterministically block malicious queries—all without slowing down your application.
 
-## 🌟 Gold Standard Developer Guide
+## 🌟 The Aegis Product Suite
 
-Welcome to the Aegis project! This README serves as the ultimate onboarding guide for junior developers and system architects alike. It covers everything from our core architecture to the deployment pipeline.
+The Aegis ecosystem is divided into three distinct products. Here is a detailed breakdown of what each product does, with examples:
+
+### 1. Aegis Proxy (Tier 1 — Open Source Core)
+**What it does:** 
+This is the core engine (Layer 4 TCP Proxy) built in user-space Go. It intercepts connections and uses native PostgreSQL AST parsing (`go-pgquery`) to deterministically block standard malicious queries (`DROP TABLE`, `DELETE`). It exposes generic Go interfaces (`Authenticator`, `PolicyValidator`) to allow for enterprise extensibility without compromising the open-source license.
+
+### 2. Aegis SaaS Control Plane (Tier 2 — Managed SaaS)
+**What it does:**
+This is the hosted control plane for startups. It leverages WebSockets/SSE to provide real-time threat telemetry across an entire fleet of proxies. It also features a dynamic, ML-driven heuristic analyzer that detects runaway AI loops and automatically pushes adaptive rate-limiting (`AEGIS_RATE_LIMIT`) down to the OSS proxies via their HTTP APIs to protect cloud infrastructure costs.
+
+### 3. Aegis Enterprise Guardrail (Tier 3 — Enterprise)
+**What it does:**
+This is a proprietary, private repository that compiles into a high-performance binary wrapping the OSS core. It injects strict B2B features directly into the OSS interfaces:
+- **eBPF Network Acceleration:** Drops malicious packets directly in the Linux kernel (XDP) for absolute zero-latency execution.
+- **Cryptographic Agent Identity:** Verifies JWTs/mTLS against cached JWKS during the `StartupMessage` to prevent API key sharing ("Shadow AI").
+- **Custom YAML Policies:** Injects RBAC granular policies into the AST parser.
+- **SIEM Exporters:** Batches and streams anomaly events directly to enterprise SIEM platforms (Splunk, Datadog).
 
 ---
 
@@ -18,10 +34,9 @@ Welcome to the Aegis project! This README serves as the ultimate onboarding guid
 
 Aegis is designed to support a **Multi-Agent Workflow** where several autonomous AI agents can operate simultaneously without cross-contamination. 
 - **Sandboxed Execution:** Every agent interaction is securely sandboxed in a dedicated Copy-on-Write (CoW) ephemeral branch provisioned via the Neon API.
-- **Z-Score Anomaly Detection:** Agents' queries are mathematically analyzed in real-time using Native PostgreSQL AST parsing via `wasilibs/go-pgquery` (replacing Vitess). If an agent hallucinates a destructive query (e.g., `DROP TABLE`), Aegis's Z-score engine detects it deterministically.
-- **Cryptographic Agent Identity:** Agents are identified using signed JWTs (replacing raw session IDs) for secure, tamper-proof authentication.
-- **Advanced Threat Telemetry:** Zero-latency monitoring is powered by OpenTelemetry, providing deep insights into agent behavior.
-- **The Guillotine:** Once a threat is detected, the proxy severs the TCP connection in sub-milliseconds, neutralizing the agent's database access instantly.
+- **Z-Score Anomaly Detection:** Agents' queries are mathematically analyzed in real-time using Native PostgreSQL AST parsing via `wasilibs/go-pgquery`.
+- **Cryptographic Agent Identity:** Agents are identified using signed JWTs for secure, tamper-proof authentication.
+- **Advanced Threat Telemetry:** Zero-latency monitoring is powered by OpenTelemetry.
 
 ---
 
@@ -30,86 +45,38 @@ Aegis is designed to support a **Multi-Agent Workflow** where several autonomous
 Aegis seamlessly bridges high-performance systems-level intercept logic with accessible data-science workflows.
 
 1. **The Go Proxy Engine (Layer 4):**
-   Written in Go utilizing Clean Architecture. It binds to local ports (e.g., `5433` for TCP, `5434` for HTTP metrics) and intercepts PostgreSQL wire-protocol traffic. It strips custom session parameters, performs zero-latency threat analysis asynchronously, and dials out to the target serverless database.
+   Written in Go utilizing Clean Architecture. It binds to local ports (e.g., `5433` for TCP, `5434` for HTTP metrics) and intercepts PostgreSQL wire-protocol traffic.
    
 2. **The Python SDK (Application Layer):**
-   Developers or AI agents use the Python SDK (`aegis-sdk`). Using the `@safe_db_run` decorator, the SDK automatically provisions an ephemeral branch, configures the agent's connection string to point to the local Go Proxy instead of directly to the DB, and manages the lifecycle of the test.
-
-```mermaid
-flowchart LR
-    subgraph Multi-Agent Application Layer
-        Agent1[AI Agent 1]
-        Agent2[AI Agent 2]
-        SDK[Python SDK @safe_db_run]
-    end
-
-    subgraph Security Layer
-        Proxy[Go Proxy Engine\nThe Guillotine]
-    end
-
-    subgraph Serverless Infrastructure
-        Neon[Neon DB Serverless]
-    end
-
-    Agent1 --> SDK
-    Agent2 --> SDK
-    SDK -- "Localhost TCP Bridge" --> Proxy
-    Proxy -- "Intercepted & Validated Queries" --> Neon
-```
+   Using the `@safe_db_run` decorator, the SDK automatically provisions an ephemeral branch, configures the agent's connection string to point to the local Go Proxy instead of directly to the DB, and manages the lifecycle of the test.
 
 ---
 
 ## 🚀 CI/CD Deployment Pipeline
 
 Aegis utilizes a hardened CI/CD infrastructure for enterprise-grade distribution:
-- **Continuous Integration:** Every commit to the `main` branch or pull request triggers a suite of unit tests, AST parser verifications, and Python integration tests.
-- **Docker Publishing:** Through `.github/workflows/docker-publish.yml`, the pipeline builds multi-architecture Docker images (ARM64 & AMD64) and pushes them to Docker Hub. 
-- **Semantic Versioning:** The `scripts/release.py` utility strictly enforces semantic versioning (e.g., `v1.0.11`). Users can pull the `latest` tag for rolling updates or pin a specific version for production stability.
+- **Continuous Integration:** Every commit to the `main` branch or pull request triggers a suite of unit tests.
+- **Docker Publishing:** The pipeline builds multi-architecture Docker images (ARM64 & AMD64) and pushes them to Docker Hub. 
 
 ---
 
-## 🛠️ Quick Start for Developers
+## 🛠️ Quick Start (Docker Compose)
 
-Getting the stack running locally for development and testing takes only a few minutes.
+The easiest way to run the entire Aegis suite (Proxy, SaaS Dashboard, and Enterprise Guardrail) is using Docker Compose.
 
-### 1. Configure Environment
-Create a `.env` file in the root directory:
+### 1. Run the Stack
+Navigate to the root directory where `docker-compose.yml` is located and run:
 ```bash
-# Neon API Configuration
-export NEON_API_KEY="your_neon_api_key_here"
-export NEON_PROJECT_ID="your_neon_project_id_here"
-
-# Aegis Proxy Configuration
-export AEGIS_MODE="enforce" # 'enforce' (blocks) or 'monitor' (shadows)
-export AEGIS_PROXY_TCP_PORT="5433"
-export AEGIS_PROXY_HTTP_PORT="5434"
-export AEGIS_JWT_SECRET="your_jwt_secret_here"
+docker-compose up -d
 ```
 
-### 2. Run the Go Proxy (Docker)
-We recommend running the proxy in Docker during SDK development:
-```bash
-docker run -d \
-  --name aegis-proxy \
-  -p 5433:5433 \
-  -p 5434:5434 \
-  -e NEON_API_KEY="${NEON_API_KEY}" \
-  -e NEON_PROJECT_ID="${NEON_PROJECT_ID}" \
-  -e AEGIS_MODE="${AEGIS_MODE}" \
-  -e AEGIS_JWT_SECRET="${AEGIS_JWT_SECRET}" \
-  raymondartin2/aegis-proxy:latest
-```
-
-### 3. Run Python Agent Integration Tests
-With the proxy running, test the Python SDK's bridging capabilities:
-```bash
-cd python-sdk
-pip install -r requirements.txt # or manually via pip
-python test_sdk.py
-```
+### 2. Access the Services
+- **SaaS Control Plane:** Open your browser to `http://localhost:3000`
+- **Enterprise API:** Accessible at `http://localhost:5435`
+- **TCP Proxy:** Connect your database clients to `localhost:5433`
 
 ---
 
 ## 📚 Further Reading
-- **`AGENTS.md`**: Machine-readable specifications and boundaries for AI coding assistants contributing to this repository.
+- **`AGENTS.md`**: Machine-readable specifications and boundaries for AI coding assistants.
 - **`INTERNAL_NOTES.md`**: Private runbooks, deployment guides, and troubleshooting steps.

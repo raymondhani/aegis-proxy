@@ -10,6 +10,11 @@ type QueryInspector interface {
 	IsDestructive(query string) (bool, error)
 }
 
+// PolicyValidator defines an interface for custom rule-based policy validation (Enterprise Tier).
+type PolicyValidator interface {
+	Validate(query string, sessionID string) (bool, error) // Returns true if allowed
+}
+
 // PGQueryInspector implements QueryInspector using go-pgquery.
 type PGQueryInspector struct{}
 
