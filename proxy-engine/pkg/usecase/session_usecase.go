@@ -1,7 +1,7 @@
 package usecase
 
 import (
-	"aegis/proxy/internal/domain"
+	"aegis/proxy/pkg/domain"
 	"errors"
 )
 

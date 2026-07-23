@@ -1,7 +1,7 @@
 package usecase_test
 
 import (
-	"aegis/proxy/internal/usecase"
+	"aegis/proxy/pkg/usecase"
 	"testing"
 )
 

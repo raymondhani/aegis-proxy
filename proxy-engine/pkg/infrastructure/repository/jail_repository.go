@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"aegis/proxy/internal/domain"
+	"aegis/proxy/pkg/domain"
 )
 
 // InMemoryJailRepository is a sync.Map-backed implementation of domain.JailRepository.

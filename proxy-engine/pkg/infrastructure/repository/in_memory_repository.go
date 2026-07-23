@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"aegis/proxy/internal/domain"
+	"aegis/proxy/pkg/domain"
 	"fmt"
 	"sync"
 )

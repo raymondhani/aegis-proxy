@@ -1,8 +1,8 @@
 package server
 
 import (
-	"aegis/proxy/internal/domain"
-	"aegis/proxy/internal/usecase"
+	"aegis/proxy/pkg/domain"
+	"aegis/proxy/pkg/usecase"
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"

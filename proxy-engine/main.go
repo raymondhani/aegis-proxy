@@ -1,10 +1,10 @@
-﻿package main
+package main
 
 import (
-	"aegis/proxy/internal/infrastructure/observability"
-	"aegis/proxy/internal/infrastructure/repository"
-	"aegis/proxy/internal/infrastructure/server"
-	"aegis/proxy/internal/usecase"
+	"aegis/proxy/pkg/infrastructure/observability"
+	"aegis/proxy/pkg/infrastructure/repository"
+	"aegis/proxy/pkg/infrastructure/server"
+	"aegis/proxy/pkg/usecase"
 	"context"
 	"log/slog"
 	"os"
