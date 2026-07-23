@@ -2,6 +2,10 @@
   <h1>🛡️ Aegis Security Proxy</h1>
   <p><b>Enterprise-grade, deterministic database security proxy for modern serverless architectures.</b></p>
   <p><i>Shift-Left Security. Zero Hallucinations. Sub-millisecond Response.</i></p>
+  <br>
+  <a href="https://pypi.org/project/aegis-proxy-sdk/"><img src="https://img.shields.io/pypi/v/aegis-proxy-sdk.svg" alt="PyPI version"></a>
+  <a href="https://hub.docker.com/r/raymondartin2/aegis-proxy"><img src="https://img.shields.io/docker/pulls/raymondartin2/aegis-proxy.svg" alt="Docker Pulls"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License"></a>
 </div>
 
 ---
@@ -57,6 +61,20 @@ Aegis seamlessly bridges high-performance systems-level intercept logic with acc
 Aegis utilizes a hardened CI/CD infrastructure for enterprise-grade distribution:
 - **Continuous Integration:** Every commit to the `main` branch or pull request triggers a suite of unit tests.
 - **Docker Publishing:** The pipeline builds multi-architecture Docker images (ARM64 & AMD64) and pushes them to Docker Hub. 
+
+---
+
+## 📦 Installation
+
+### Python SDK (PyPI)
+```bash
+pip install aegis-proxy-sdk
+```
+
+### Docker Engine
+```bash
+docker pull raymondartin2/aegis-proxy
+```
 
 ---
 
