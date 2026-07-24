@@ -95,6 +95,63 @@ docker-compose up -d
 
 ---
 
+## 🚀 Quickstart: Python SDK Integration
+
+To connect to the local Docker proxy from your Python application, you must install the SDK and configure your environment.
+
+### 1. Installation
+Install the SDK and the PostgreSQL driver:
+```bash
+pip install aegis-proxy-sdk psycopg2-binary
+```
+
+### 2. Environment Configuration
+Create a `.env` file in the root of your project containing your Neon credentials:
+```env
+NEON_API_KEY=your_api_key_here
+NEON_PROJECT_ID=your_project_id_here
+```
+
+### 3. The `@safe_db_run` Decorator
+The SDK relies on the `@safe_db_run` decorator. When applied to a function, it automatically provisions a secure, ephemeral Neon branch. It then dynamically rewrites your connection string's host and port to point to the local Go proxy (defaulting to `localhost:5433`, but configurable via `@safe_db_run(agent_id="test", proxy_port=9000)`).
+
+### 4. Testing the AST Guillotine
+Here is a complete Python script demonstrating how the proxy deterministically catches and severs connections executing malicious queries like `DROP TABLE`:
+
+```python
+import psycopg2
+from aegis_proxy_sdk import safe_db_run
+
+@safe_db_run(agent_id="test_agent", proxy_port=5433)
+def execute_test(dsn: str):
+    print("Connecting to local Aegis Proxy...")
+    
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cursor = conn.cursor()
+        
+        # 1. Execute a benign query
+        print("Executing benign query: SELECT 1;")
+        cursor.execute("SELECT 1;")
+        print(f"Result: {cursor.fetchone()}")
+        
+        # 2. Execute a malicious query (will trigger the Guillotine)
+        print("Executing malicious query: DROP TABLE users;")
+        cursor.execute("DROP TABLE users;")
+        
+    except psycopg2.OperationalError as e:
+        print(f"\n[!] Connection Severed by Proxy: {e}")
+    finally:
+        if 'conn' in locals() and not conn.closed:
+            conn.close()
+
+if __name__ == "__main__":
+    execute_test()
+```
+
+---
+
 ## 🏢 Aegis Enterprise Edition
 The open-source proxy is designed for local development and single-node sandboxing. For production-scale teams, **Aegis Enterprise (Tier 3)** is commercially backed by **Languaza Software** and offers:
 
