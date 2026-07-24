@@ -107,11 +107,32 @@ Copy the `.env.sample` file to a new file named `.env` in the root of your proje
 If you are running the ready-made Docker container via `docker-compose.yml`, these tokens are injected into the proxy service automatically via the `.env` file.
 
 ### Step 3: Start the Proxy
-Start the proxy stack locally:
+Because Aegis is a zero-trust security proxy, the Docker container must know your `AEGIS_ADMIN_TOKEN` and `AEGIS_JWT_SECRET` to authorize connections. You can start the proxy and inject these tokens using either standalone Docker or Docker Compose.
+
+**Option A: Standalone Docker (For users who only downloaded the pip package)**
+If you are just writing a Python script and haven't cloned the GitHub repository, run the container directly. 
+
+Docker containers are isolated, so they cannot see your local files by default. The `--env-file .env` flag is crucial here—it securely injects your security tokens and Neon credentials from your `.env` file straight into the proxy container.
+
+Make sure your terminal is in the exact same directory as your `.env` file, then run:
+```bash
+docker run -d \
+  --name aegis-proxy \
+  --env-file .env \
+  -p 5433:5433 \
+  raymondartin2/aegis-proxy
+```
+
+**Option B: Docker Compose (For users who cloned the repository)**
+If you cloned the full GitHub repository, you can use the included `docker-compose.yml` file. Docker Compose is designed to automatically look for a `.env` file in the same directory and inject those tokens into the proxy service for you.
+
+Simply run:
 ```bash
 docker-compose up -d
 ```
-The open-source TCP Proxy will now be listening on `localhost:5433`.
+
+**Verify it's running:**
+Regardless of which option you chose, the open-source TCP Proxy will now be running in the background. You can verify it is active and listening on port `5433` by typing `docker ps` in your terminal.
 
 ### Step 4: Create the Test Script
 Create a new file named `test_guillotine.py` and paste the following code. The SDK relies on the `@safe_db_run` decorator, which automatically provisions a secure, ephemeral Neon branch and dynamically rewrites your connection string's host and port to point to the local Go proxy.
