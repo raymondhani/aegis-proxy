@@ -135,13 +135,21 @@ docker-compose up -d
 Regardless of which option you chose, the open-source TCP Proxy will now be running in the background. You can verify it is active and listening on port `5433` by typing `docker ps` in your terminal.
 
 ### Step 4: Create the Test Script
-Create a new file named `test_guillotine.py` and paste the following code. The SDK relies on the `@safe_db_run` decorator, which automatically provisions a secure, ephemeral Neon branch and dynamically rewrites your connection string's host and port to point to the local Go proxy.
+Create a new file named `test_guillotine.py` and paste the following code. The SDK relies on the `@safe_db_run` decorator, which automatically provisions a secure, ephemeral Neon branch and dynamically rewrites your connection string to point to the local Go proxy. 
+
+For advanced setups (like remote Docker hosts or multi-agent telemetry), the decorator accepts the following optional parameters:
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `agent_id` | `str` | `None` | Custom identifier for the AI agent (injected into telemetry). |
+| `proxy_host` | `str` | `"localhost"` | The IP or hostname where the Aegis proxy is running. |
+| `proxy_port` | `int` | `5433` | The TCP port the proxy is listening on. |
 
 ```python
 import psycopg2
 from aegis_sdk import safe_db_run
 
-@safe_db_run(agent_id="test_agent", proxy_port=5433)
+@safe_db_run()
 def execute_test(db_url: str):
     print("Connecting to local Aegis Proxy...")
     
@@ -175,6 +183,15 @@ Run the script to see the AST Guillotine deterministically catch and sever the m
 ```bash
 python test_guillotine.py
 ```
+
+---
+
+## 🧠 Advanced SDK Usage
+
+While the `@safe_db_run` decorator provides a seamless, zero-friction wrapper, the `aegis_sdk` exposes its underlying classes for developers who need to build custom integrations or manage state manually:
+
+- **`NeonProvisioner`**: Programmatically create, monitor, and tear down Neon ephemeral branches outside of the standard context manager flow.
+- **`AnomalyDetector`**: Interface directly with the Z-Score engine to manually evaluate query payloads or agent behaviors before they hit the execution pipeline.
 
 ---
 
