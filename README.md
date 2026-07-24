@@ -82,39 +82,39 @@ docker pull raymondartin2/aegis-proxy
 
 To connect to the local Docker proxy from your Python application, you must install the SDK and configure your environment.
 
-### 1. Installation
-Install the SDK and the PostgreSQL driver:
+### Step 1: Installation & Virtual Environment
+Create and activate a virtual environment, then install the SDK and the PostgreSQL driver:
+
+**Linux / macOS:**
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install aegis-proxy-sdk psycopg2-binary
 ```
 
-### 2. Environment Configuration
-Create a `.env` file in the root of your project containing your Neon credentials as well as your Aegis security tokens.
-
-**Important**: The `AEGIS_ADMIN_TOKEN` and `AEGIS_JWT_SECRET` are arbitrary cryptographic secrets you define. They are used to authenticate your application with the Aegis Proxy. They must exactly match the values configured in the proxy's environment.
-
-```env
-NEON_API_KEY=your_api_key_here
-NEON_PROJECT_ID=your_project_id_here
-AEGIS_ADMIN_TOKEN=your_custom_admin_token
-AEGIS_JWT_SECRET=your_custom_jwt_secret
+**Windows:**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install aegis-proxy-sdk psycopg2-binary
 ```
 
-If you are running the ready-made Docker container via `docker-compose.yml`, you must inject these exact same values into the proxy service so the container knows what secrets to expect:
+### Step 2: Environment Configuration
+Copy the `.env.sample` file to a new file named `.env` in the root of your project and populate it with your credentials.
 
-```yaml
-  aegis-proxy:
-    image: raymondartin2/aegis-proxy
-    environment:
-      - AEGIS_ADMIN_TOKEN=your_custom_admin_token
-      - AEGIS_JWT_SECRET=your_custom_jwt_secret
+**Note:** `AEGIS_JWT_SECRET` must be at least 32 characters long for secure HMAC-SHA256 signing to avoid PyJWT security warnings.
+
+If you are running the ready-made Docker container via `docker-compose.yml`, these tokens are injected into the proxy service automatically via the `.env` file.
+
+### Step 3: Start the Proxy
+Start the proxy stack locally:
+```bash
+docker-compose up -d
 ```
+The open-source TCP Proxy will now be listening on `localhost:5433`.
 
-### 3. The `@safe_db_run` Decorator
-The SDK relies on the `@safe_db_run` decorator. When applied to a function, it automatically provisions a secure, ephemeral Neon branch. It then dynamically rewrites your connection string's host and port to point to the local Go proxy (defaulting to `localhost:5433`, but configurable via `@safe_db_run(agent_id="test", proxy_port=9000)`).
-
-### 4. Testing the AST Guillotine
-Here is a complete Python script demonstrating how the proxy deterministically catches and severs connections executing malicious queries like `DROP TABLE`:
+### Step 4: Create the Test Script
+Create a new file named `test_guillotine.py` and paste the following code. The SDK relies on the `@safe_db_run` decorator, which automatically provisions a secure, ephemeral Neon branch and dynamically rewrites your connection string's host and port to point to the local Go proxy.
 
 ```python
 import psycopg2
@@ -148,20 +148,12 @@ if __name__ == "__main__":
     execute_test()
 ```
 
----
+### Step 5: Run the Test
+Run the script to see the AST Guillotine deterministically catch and sever the malicious connection!
 
-## 🛠️ Quick Start (Docker Compose)
-
-The easiest way to run the entire Aegis suite (Proxy, SaaS Dashboard, and Enterprise Guardrail) is using Docker Compose.
-
-### 1. Run the Stack
-Navigate to the root directory where `docker-compose.yml` is located and run:
 ```bash
-docker-compose up -d
+python test_guillotine.py
 ```
-
-### 2. Access the Services
-- **TCP Proxy:** Connect your database clients to `localhost:5433`
 
 ---
 
