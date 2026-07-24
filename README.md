@@ -106,10 +106,25 @@ pip install aegis-proxy-sdk psycopg2-binary
 ```
 
 ### 2. Environment Configuration
-Create a `.env` file in the root of your project containing your Neon credentials:
+Create a `.env` file in the root of your project containing your Neon credentials as well as your Aegis security tokens.
+
+**Important**: The `AEGIS_ADMIN_TOKEN` and `AEGIS_JWT_SECRET` are arbitrary cryptographic secrets you define. They are used to authenticate your application with the Aegis Proxy. They must exactly match the values configured in the proxy's environment.
+
 ```env
 NEON_API_KEY=your_api_key_here
 NEON_PROJECT_ID=your_project_id_here
+AEGIS_ADMIN_TOKEN=your_custom_admin_token
+AEGIS_JWT_SECRET=your_custom_jwt_secret
+```
+
+If you are running the ready-made Docker container via `docker-compose.yml`, you must inject these exact same values into the proxy service so the container knows what secrets to expect:
+
+```yaml
+  aegis-proxy:
+    image: raymondartin2/aegis-proxy
+    environment:
+      - AEGIS_ADMIN_TOKEN=your_custom_admin_token
+      - AEGIS_JWT_SECRET=your_custom_jwt_secret
 ```
 
 ### 3. The `@safe_db_run` Decorator

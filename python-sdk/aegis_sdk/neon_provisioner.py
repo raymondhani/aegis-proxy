@@ -236,7 +236,7 @@ def validate_has_primary_keys(db_url: str, before: dict, after: dict):
 # Decorator
 # ==========================================
 
-def safe_db_run(func=None, *, validation_rules=None):
+def safe_db_run(func=None, *, agent_id=None, proxy_port=None, validation_rules=None):
     """
     Decorator that provisions a Neon database branch, routes execution through the Aegis Go Proxy,
     takes schema snapshots, runs validation rules, and guarantees resource cleanup.
@@ -251,6 +251,8 @@ def safe_db_run(func=None, *, validation_rules=None):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
+            if agent_id:
+                print(f"[Neon SDK] Initializing sandboxed run for agent: {agent_id}")
             # Auto-start anomaly detector daemon (double-checked locking)
             global _detector_started
             if not _detector_started:
@@ -295,7 +297,8 @@ def safe_db_run(func=None, *, validation_rules=None):
                 # We inject the session_id as a parameter suffix inside the database name path
                 # e.g., postgresql://role:password@localhost:5433/neondb?session_id=UUID&sslmode=disable
                 parsed = urllib.parse.urlparse(real_conn_uri)
-                netloc = f"{PROXY_TCP_HOST}:{PROXY_TCP_PORT}"
+                target_port = proxy_port if proxy_port else PROXY_TCP_PORT
+                netloc = f"{PROXY_TCP_HOST}:{target_port}"
                 if parsed.password:
                     netloc = f"{parsed.username}:{parsed.password}@{netloc}"
                 elif parsed.username:
@@ -315,7 +318,7 @@ def safe_db_run(func=None, *, validation_rules=None):
                 ))
 
                 print(f"[Neon SDK] Registered Session {session_id} with Aegis Proxy.")
-                print(f"[Neon SDK] Injecting proxy connection URL: postgresql://***:***@{PROXY_TCP_HOST}:{PROXY_TCP_PORT}/{db_name}?aegis_jwt=***")
+                print(f"[Neon SDK] Injecting proxy connection URL: postgresql://***:***@{PROXY_TCP_HOST}:{target_port}/{db_name}?aegis_jwt=***")
 
                 # 5. Take schema snapshot before execution
                 # Connect directly to the branch to capture snapshot (avoiding proxy overhead)
