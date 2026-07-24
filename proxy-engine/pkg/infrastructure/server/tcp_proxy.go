@@ -17,6 +17,7 @@ import (
 	"os"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 
@@ -75,13 +76,26 @@ func (p *TCPProxy) Start(addr string) error {
 	defer listener.Close()
 	slog.Info("TCPProxy listening", slog.String("address", addr))
 
+	// Limit concurrent connections to prevent FD exhaustion and OOM
+	connSemaphore := semaphore.NewWeighted(10000)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			slog.Error("Error accepting connection", slog.Any("error", err))
 			continue
 		}
-		go p.handleConnection(conn)
+		
+		if !connSemaphore.TryAcquire(1) {
+			slog.Warn("Connection limit reached, dropping new connection")
+			conn.Close()
+			continue
+		}
+		
+		go func(c net.Conn) {
+			defer connSemaphore.Release(1)
+			p.handleConnection(c)
+		}(conn)
 	}
 }
 
@@ -91,6 +105,9 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
 	slog.Info("New client connection", slog.String("remote_address", clientConn.RemoteAddr().String()))
+
+	// Enforce strict read deadline for the initial Postgres handshake to prevent Slowloris attacks
+	_ = clientConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 	// Read initial 8 bytes of connection request.
 	header := make([]byte, 8)
@@ -161,6 +178,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	// Extract and verify JWT to get session ID using injected Authenticator
 	sessionID, err := p.authenticator.Authenticate(sm)
+	
+	// Handshake complete, remove the read deadline for normal operations
+	_ = clientConn.SetReadDeadline(time.Time{})
+	
 	if err != nil {
 		slog.Warn("Routing failed: Authentication failed", slog.Any("error", err))
 		sendPgError(clientConn, fmt.Sprintf("Aegis Proxy Error: Invalid Agent Identity: %v", err))
@@ -256,6 +277,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	errChan := make(chan error, 2)
 	tb := newTokenBucket(p.rateLimit)
 
+	// Maps to track Extended Protocol state for this connection to prevent bypasses
+	approvedStatements := make(map[string]bool) // stmtName -> bool
+	portalToStatement := make(map[string]string) // portalName -> stmtName
+
 	// Client to Backend (Interception, Filtering, Rate Limiting, and Timeout)
 	go func() {
 		for {
@@ -269,27 +294,78 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 				return
 			}
 
-			// Check if packet type is 'Q' (Query) or 'P' (Parse)
-			if t == 'Q' || t == 'P' {
-				queryStr := ""
-				if t == 'Q' {
-					queryStr = string(packetBytes[5 : len(packetBytes)-1])
-				} else if t == 'P' {
-					idx := 5
-					for idx < len(packetBytes) && packetBytes[idx] != 0 {
-						idx++
-					}
-					idx++ // skip statement name null byte
-					start := idx
-					for idx < len(packetBytes) && packetBytes[idx] != 0 {
-						idx++
-					}
-					if idx > start {
-						queryStr = string(packetBytes[start:idx])
-					}
+			// Handle Postgres Extended Protocol (P, B, E) and Simple Query (Q)
+			queryStr := ""
+			
+			if t == 'Q' {
+				queryStr = string(packetBytes[5 : len(packetBytes)-1])
+			} else if t == 'P' {
+				idx := 5
+				startName := idx
+				for idx < len(packetBytes) && packetBytes[idx] != 0 {
+					idx++
 				}
+				stmtName := string(packetBytes[startName:idx])
+				idx++ // skip statement name null byte
+				
+				startQuery := idx
+				for idx < len(packetBytes) && packetBytes[idx] != 0 {
+					idx++
+				}
+				if idx > startQuery {
+					queryStr = string(packetBytes[startQuery:idx])
+				}
+				
+				// Validate 'P' below, and if it passes, we add it to approvedStatements
+				isDestructive, pErr := p.queryInspector.IsDestructive(queryStr)
+				if pErr == nil && !isDestructive {
+					approvedStatements[stmtName] = true
+				}
+			} else if t == 'B' {
+				// Bind message: binds a portal to a statement
+				idx := 5
+				startPortal := idx
+				for idx < len(packetBytes) && packetBytes[idx] != 0 {
+					idx++
+				}
+				portalName := string(packetBytes[startPortal:idx])
+				idx++
+				
+				startStmt := idx
+				for idx < len(packetBytes) && packetBytes[idx] != 0 {
+					idx++
+				}
+				stmtName := string(packetBytes[startStmt:idx])
+				
+				// Ensure the statement being bound was previously parsed and approved
+				if !approvedStatements[stmtName] {
+					RecordQueryBlocked()
+					slog.Error("Blocked Bind to unapproved prepared statement", slog.String("stmt_name", stmtName))
+					sendPgError(clientConn, "Aegis Proxy Error: Attempted to bind an unapproved prepared statement.")
+					errChan <- errors.New("bind to unapproved statement")
+					return
+				}
+				portalToStatement[portalName] = stmtName
+			} else if t == 'E' {
+				// Execute message: executes a portal
+				idx := 5
+				startPortal := idx
+				for idx < len(packetBytes) && packetBytes[idx] != 0 {
+					idx++
+				}
+				portalName := string(packetBytes[startPortal:idx])
+				
+				// Ensure the portal being executed was bound to an approved statement
+				if stmtName, exists := portalToStatement[portalName]; !exists || !approvedStatements[stmtName] {
+					RecordQueryBlocked()
+					slog.Error("Blocked Execute of unapproved portal", slog.String("portal_name", portalName))
+					sendPgError(clientConn, "Aegis Proxy Error: Attempted to execute an unapproved portal.")
+					errChan <- errors.New("execute of unapproved portal")
+					return
+				}
+			}
 
-				if queryStr != "" {
+			if queryStr != "" {
 					// 0. Check jail blocklist FIRST (O(1) sync.Map lookup)
 					if p.jailRepo.IsJailed(sessionID) {
 						RecordQueryBlocked()
@@ -381,7 +457,6 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 						Blocked:     blocked,
 					})
 				}
-			}
 
 			// Apply write deadline to backend write operations
 			if p.idleTimeout > 0 {
@@ -659,9 +734,19 @@ func sendPgInsufficientPrivilegeError(conn net.Conn, message string) {
 }
 
 
+var bufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32768)
+		return &b
+	},
+}
+
 // copyWithTimeout copies all bytes from src to dst, enforcing a read/write timeout.
 func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan chan error) {
-	buf := make([]byte, 32768)
+	bufPtr := bufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer bufferPool.Put(bufPtr)
+
 	for {
 		if timeout > 0 {
 			_ = src.SetReadDeadline(time.Now().Add(timeout))

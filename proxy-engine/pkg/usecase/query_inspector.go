@@ -35,7 +35,8 @@ func (i *PGQueryInspector) IsDestructive(query string) (bool, error) {
 		strings.Contains(treeJSON, `"TruncateStmt":{`) ||
 		strings.Contains(treeJSON, `"DropdbStmt":{`) ||
 		strings.Contains(treeJSON, `"AlterTableStmt":{`) ||
-		strings.Contains(treeJSON, `"RenameStmt":{`)
+		strings.Contains(treeJSON, `"RenameStmt":{`) ||
+		strings.Contains(treeJSON, `"DoStmt":{`)
 
 	return isDestructive, nil
 }

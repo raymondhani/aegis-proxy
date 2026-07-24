@@ -1,6 +1,6 @@
 module aegis/proxy
 
-go 1.22.0
+go 1.25.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -11,6 +11,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
+	golang.org/x/sync v0.20.0
 )
 
 require (

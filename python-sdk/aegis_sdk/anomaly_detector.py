@@ -123,6 +123,24 @@ class SlidingWindowCMS:
         stddev = math.sqrt(variance)
         return (mean, stddev)
 
+    def apply_decay(self) -> None:
+        """Apply exponential decay (halving) to all buckets and prune empty fingerprints."""
+        with self._lock:
+            for bucket in self._buckets:
+                for row in range(self.depth):
+                    for col in range(self.width):
+                        bucket[row][col] //= 2
+            
+            active_fps = set()
+            for fp in self._known_fingerprints:
+                total = 0
+                for bucket in self._buckets:
+                    min_val = min(bucket[row][self._hash(fp, row)] for row in range(self.depth))
+                    total += min_val
+                if total > 0:
+                    active_fps.add(fp)
+            self._known_fingerprints = active_fps
+
 
 # ==========================================
 # Strike Tracker
@@ -184,6 +202,7 @@ class AnomalyDetector:
         cms_width = int(os.environ.get("AEGIS_CMS_WIDTH", "1024"))
         cms_depth = int(os.environ.get("AEGIS_CMS_DEPTH", "4"))
         window_buckets = int(os.environ.get("AEGIS_WINDOW_BUCKETS", "60"))
+        self.decay_interval = float(os.environ.get("AEGIS_CMS_DECAY_INTERVAL", "300"))
         self.proxy_http_url = os.environ.get("AEGIS_ADMIN_URL") or os.environ.get("AEGIS_PROXY_HTTP_URL") or "http://localhost:5434"
 
         self.cms = SlidingWindowCMS(width=cms_width, depth=cms_depth, window_buckets=window_buckets)
@@ -191,12 +210,22 @@ class AnomalyDetector:
         self._started = False
 
     def start(self) -> None:
-        """Launch the telemetry consumer as a daemon thread."""
+        """Launch the telemetry consumer and decay loops as daemon threads."""
         if self._started:
             return
         self._started = True
         t = threading.Thread(target=self._consume_telemetry, daemon=True)
         t.start()
+        
+        t_decay = threading.Thread(target=self._decay_loop, daemon=True)
+        t_decay.start()
+
+    def _decay_loop(self) -> None:
+        """Periodically apply exponential decay to the CMS to prevent baseline drift."""
+        while True:
+            time.sleep(self.decay_interval)
+            print("[DAEMON] Applying CMS exponential decay...")
+            self.cms.apply_decay()
 
     def _consume_telemetry(self) -> None:
         """Connect to the proxy SSE telemetry stream and process events.
