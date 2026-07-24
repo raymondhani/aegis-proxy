@@ -78,23 +78,6 @@ docker pull raymondartin2/aegis-proxy
 
 ---
 
-## 🛠️ Quick Start (Docker Compose)
-
-The easiest way to run the entire Aegis suite (Proxy, SaaS Dashboard, and Enterprise Guardrail) is using Docker Compose.
-
-### 1. Run the Stack
-Navigate to the root directory where `docker-compose.yml` is located and run:
-```bash
-docker-compose up -d
-```
-
-### 2. Access the Services
-- **SaaS Control Plane:** Open your browser to `http://localhost:3000`
-- **Enterprise API:** Accessible at `http://localhost:5435`
-- **TCP Proxy:** Connect your database clients to `localhost:5433`
-
----
-
 ## 🚀 Quickstart: Python SDK Integration
 
 To connect to the local Docker proxy from your Python application, you must install the SDK and configure your environment.
@@ -138,11 +121,11 @@ import psycopg2
 from aegis_sdk import safe_db_run
 
 @safe_db_run(agent_id="test_agent", proxy_port=5433)
-def execute_test(dsn: str):
+def execute_test(db_url: str):
     print("Connecting to local Aegis Proxy...")
     
     try:
-        conn = psycopg2.connect(dsn)
+        conn = psycopg2.connect(db_url)
         conn.autocommit = True
         cursor = conn.cursor()
         
@@ -167,6 +150,21 @@ if __name__ == "__main__":
 
 ---
 
+## 🛠️ Quick Start (Docker Compose)
+
+The easiest way to run the entire Aegis suite (Proxy, SaaS Dashboard, and Enterprise Guardrail) is using Docker Compose.
+
+### 1. Run the Stack
+Navigate to the root directory where `docker-compose.yml` is located and run:
+```bash
+docker-compose up -d
+```
+
+### 2. Access the Services
+- **TCP Proxy:** Connect your database clients to `localhost:5433`
+
+---
+
 ## 🏢 Aegis Enterprise Edition
 The open-source proxy is designed for local development and single-node sandboxing. For production-scale teams, **Aegis Enterprise (Tier 3)** is commercially backed by **Languaza Software** and offers:
 
@@ -174,6 +172,8 @@ The open-source proxy is designed for local development and single-node sandboxi
 - **Cryptographic Identity Validation:** Verifies JWTs against cached JWKS to prevent API key sharing.
 - **Distributed State:** Redis-backed rate limiting for High Availability (HA) clusters.
 - **SIEM Exporters:** Batches and streams anomaly events directly to Datadog and Splunk.
+- **SaaS Control Plane:** Available at port `3000` via our Enterprise image.
+- **Enterprise API:** Accessible at port `5435` for extended rate-limiting logic.
 
 *Need production-grade guardrails for your AI agents? Contact our enterprise team at **aegis@languaza.net** to schedule a technical architecture review.*
 
