@@ -135,7 +135,7 @@ Here is a complete Python script demonstrating how the proxy deterministically c
 
 ```python
 import psycopg2
-from aegis_proxy_sdk import safe_db_run
+from aegis_sdk import safe_db_run
 
 @safe_db_run(agent_id="test_agent", proxy_port=5433)
 def execute_test(dsn: str):
