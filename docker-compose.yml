@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  aegis-proxy:
+    image: raymondartin2/aegis-proxy:latest
+    container_name: aegis-proxy
+    ports:
+      - "5433:5433" # TCP Proxy port
+      - "5434:5434" # HTTP Metrics port
+    env_file:
+      - .env
+    environment:
+      - AEGIS_MODE=enforce
+    networks:
+      - aegis-net
+
+networks:
+  aegis-net:
+    driver: bridge
