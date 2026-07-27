@@ -2,6 +2,7 @@ package server
 
 import (
 	"aegis/proxy/pkg/domain"
+	"aegis/proxy/pkg/infrastructure"
 	"aegis/proxy/pkg/usecase"
 	"bytes"
 	"crypto/tls"
@@ -23,7 +24,7 @@ import (
 
 // Authenticator defines the interface for verifying agent identities.
 type Authenticator interface {
-	Authenticate(sm *StartupMessage) (string, error)
+	Authenticate(sm *StartupMessage) (string, string, error)
 }
 
 // TCPProxy intercepts PostgreSQL connections and routes them dynamically.
@@ -31,27 +32,27 @@ type TCPProxy struct {
 	useCase         *usecase.SessionUseCase
 	mode            string
 	idleTimeout     time.Duration
-	rateLimit       int
 	jailRepo        domain.JailRepository
 	queryInspector  usecase.QueryInspector
 	authenticator   Authenticator
 	policyValidator usecase.PolicyValidator
+	policyManager   *infrastructure.PolicyManager
 }
 
 // DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
 type DefaultJWTAuthenticator struct{}
 
 // NewTCPProxy instantiates a TCPProxy.
-func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, rateLimit int, jailRepo domain.JailRepository, queryInspector usecase.QueryInspector) *TCPProxy {
+func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, jailRepo domain.JailRepository, queryInspector usecase.QueryInspector, policyManager *infrastructure.PolicyManager) *TCPProxy {
 	return &TCPProxy{
 		useCase:         useCase,
 		mode:            mode,
 		idleTimeout:     idleTimeout,
-		rateLimit:       rateLimit,
 		jailRepo:        jailRepo,
 		queryInspector:  queryInspector,
 		authenticator:   &DefaultJWTAuthenticator{},
 		policyValidator: nil, // Optional: injected via Enterprise Guardrail
+		policyManager:   policyManager,
 	}
 }
 
@@ -177,7 +178,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	}
 
 	// Extract and verify JWT to get session ID using injected Authenticator
-	sessionID, err := p.authenticator.Authenticate(sm)
+	sessionID, dbUser, err := p.authenticator.Authenticate(sm)
 	
 	// Handshake complete, remove the read deadline for normal operations
 	_ = clientConn.SetReadDeadline(time.Time{})
@@ -188,7 +189,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	slog.Info("Extracted session ID", slog.String("session_id", sessionID))
+	slog.Info("Extracted session ID", slog.String("session_id", sessionID), slog.String("db_user", dbUser))
 
 	// Resolve dynamic backend target host
 	sess, err := p.useCase.GetSession(sessionID)
@@ -273,9 +274,12 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		}
 	}
 
+	// Fetch policy (tenant routing handled by enterprise wrapper via Context)
+	policy := p.policyManager.GetPolicy("default")
+
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
-	tb := newTokenBucket(p.rateLimit)
+	tb := newTokenBucket(policy.RateLimitRPM)
 
 	// Maps to track Extended Protocol state for this connection to prevent bypasses
 	approvedStatements := make(map[string]bool) // stmtName -> bool
@@ -383,7 +387,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 						slog.Error("Query rate limit exceeded",
 							slog.String("session_id", sessionID),
 							slog.String("query", queryStr),
-							slog.Int("limit_per_min", p.rateLimit))
+							slog.Int("limit_per_min", policy.RateLimitRPM))
 						sendPgError(clientConn, "Aegis Proxy Error: Query rate limit exceeded. Connection terminated.")
 						errChan <- errors.New("rate limit exceeded")
 						return
@@ -533,8 +537,10 @@ func parseStartupMessage(data []byte) (*StartupMessage, error) {
 	return &StartupMessage{Version: version, Params: params}, nil
 }
 
-func (a *DefaultJWTAuthenticator) Authenticate(sm *StartupMessage) (string, error) {
+func (a *DefaultJWTAuthenticator) Authenticate(sm *StartupMessage) (string, string, error) {
 	var tokenString string
+
+	dbUser := sm.Params["user"]
 
 	// 1. Direct param check
 	if val, ok := sm.Params["aegis_jwt"]; ok {
@@ -555,12 +561,12 @@ func (a *DefaultJWTAuthenticator) Authenticate(sm *StartupMessage) (string, erro
 	}
 
 	if tokenString == "" {
-		return "", errors.New("aegis_jwt not found in connection parameters")
+		return "", "", errors.New("aegis_jwt not found in connection parameters")
 	}
 
 	secret := os.Getenv("AEGIS_JWT_SECRET")
 	if secret == "" {
-		return "", errors.New("AEGIS_JWT_SECRET environment variable is not set")
+		return "", "", errors.New("AEGIS_JWT_SECRET environment variable is not set")
 	}
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
@@ -571,17 +577,17 @@ func (a *DefaultJWTAuthenticator) Authenticate(sm *StartupMessage) (string, erro
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("failed to parse JWT: %v", err)
+		return "", "", fmt.Errorf("failed to parse JWT: %v", err)
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		if sub, ok := claims["sub"].(string); ok {
-			return sub, nil
+			return sub, dbUser, nil
 		}
-		return "", errors.New("sub claim missing from JWT")
+		return "", "", errors.New("sub claim missing from JWT")
 	}
 
-	return "", errors.New("invalid JWT token")
+	return "", "", errors.New("invalid JWT token")
 }
 
 func (sm *StartupMessage) serialize() []byte {

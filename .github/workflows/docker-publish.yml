@@ -129,6 +129,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.oss
           platforms: linux/amd64,linux/arm64
           # Push only when: (a) triggered by a tag push, OR (b) manual dispatch
           # with dry_run=false. Default manual dispatch is dry_run=true (no push).

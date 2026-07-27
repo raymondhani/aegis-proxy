@@ -8,7 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestExtractAndVerifyJWT(t *testing.T) {
+func TestDefaultJWTAuthenticator(t *testing.T) {
 	os.Setenv("AEGIS_JWT_SECRET", "testsecret")
 	defer os.Unsetenv("AEGIS_JWT_SECRET")
 
@@ -53,17 +53,18 @@ func TestExtractAndVerifyJWT(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sm := &startupMessage{
-				version: 196608,
-				params:  tt.params,
+			sm := &StartupMessage{
+				Version: 196608,
+				Params:  tt.params,
 			}
-			sub, err := extractAndVerifyJWT(sm)
+			auth := &DefaultJWTAuthenticator{}
+			sub, _, err := auth.Authenticate(sm)
 			if (err != nil) != tt.expectErr {
-				t.Errorf("extractAndVerifyJWT() error = %v, expectErr %v", err, tt.expectErr)
+				t.Errorf("Authenticate() error = %v, expectErr %v", err, tt.expectErr)
 				return
 			}
 			if sub != tt.wantSub {
-				t.Errorf("extractAndVerifyJWT() got = %v, want %v", sub, tt.wantSub)
+				t.Errorf("Authenticate() got = %v, want %v", sub, tt.wantSub)
 			}
 		})
 	}

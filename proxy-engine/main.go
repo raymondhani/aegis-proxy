@@ -1,6 +1,7 @@
 package main
 
 import (
+	"aegis/proxy/pkg/infrastructure"
 	"aegis/proxy/pkg/infrastructure/observability"
 	"aegis/proxy/pkg/infrastructure/repository"
 	"aegis/proxy/pkg/infrastructure/server"
@@ -8,9 +9,10 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -20,7 +22,6 @@ func main() {
 
 	slog.Info("Starting Aegis DB Proxy Engine...")
 
-	// Initialize clean architecture modules
 	// Initialize OpenTelemetry
 	ctx := context.Background()
 	shutdownOTel, err := observability.InitOTel(ctx)
@@ -34,12 +35,32 @@ func main() {
 		}
 	}()
 
+	// Connect to Redis
+	redisURL := os.Getenv("AEGIS_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
+
+	opts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		slog.Error("Failed to parse Redis URL", slog.Any("error", err))
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(opts)
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		slog.Error("Failed to connect to Redis", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	// Start OpenTelemetry consumer for TelemetryBus
-	go server.StartOTelConsumer(ctx)
+	go server.StartOTelConsumer(ctx, redisClient)
 
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
 	jailRepo := repository.NewInMemoryJailRepository()
+	policyManager := infrastructure.NewPolicyManager(redisClient)
 
 	// Set listening addresses and configuration mode (bind to 0.0.0.0 for Docker compatibility)
 	tcpAddr := "0.0.0.0:5433"
@@ -66,17 +87,6 @@ func main() {
 		idleTimeout = 15 * time.Second
 	}
 
-	// Read and parse query rate limiting configuration (queries per minute)
-	rateLimitStr := os.Getenv("AEGIS_RATE_LIMIT")
-	rateLimit := 100 // default to 100 queries per minute
-	if rateLimitStr != "" {
-		if val, err := strconv.Atoi(rateLimitStr); err == nil {
-			rateLimit = val
-		} else {
-			slog.Error("Invalid AEGIS_RATE_LIMIT, defaulting to 100", slog.String("value", rateLimitStr), slog.Any("error", err))
-		}
-	}
-
 	if port := os.Getenv("AEGIS_PROXY_TCP_PORT"); port != "" {
 		if !strings.Contains(port, ":") {
 			tcpAddr = "0.0.0.0:" + port
@@ -94,13 +104,12 @@ func main() {
 
 	// 1. Start the TCP Layer 4 DB connection proxy listener
 	queryInspector := usecase.NewPGQueryInspector()
-	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, rateLimit, jailRepo, queryInspector)
+	tcpProxy := server.NewTCPProxy(useCase, mode, idleTimeout, jailRepo, queryInspector, policyManager)
 	go func() {
 		slog.Info("Starting DB connection interceptor",
 			slog.String("address", tcpAddr),
 			slog.String("mode", mode),
 			slog.Duration("idle_timeout", idleTimeout),
-			slog.Int("rate_limit_per_min", rateLimit),
 			slog.String("jail_enabled", jailEnabled),
 		)
 		if err := tcpProxy.Start(tcpAddr); err != nil {

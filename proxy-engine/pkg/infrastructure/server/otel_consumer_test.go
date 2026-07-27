@@ -24,7 +24,7 @@ func TestOTelConsumer(t *testing.T) {
 	defer cancel()
 
 	// Start consumer
-	go StartOTelConsumer(ctx)
+	go StartOTelConsumer(ctx, nil)
 
 	// Wait for consumer to spin up
 	time.Sleep(50 * time.Millisecond)

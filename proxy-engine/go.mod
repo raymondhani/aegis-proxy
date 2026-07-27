@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/redis/go-redis/v9 v9.21.0
 	github.com/wasilibs/go-pgquery v0.0.0-20260623022807-b68b28131ed3
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0
@@ -30,6 +31,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

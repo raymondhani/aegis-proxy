@@ -2,15 +2,17 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
 // StartOTelConsumer starts the background goroutine to process QueryEvents from TelemetryBus
-func StartOTelConsumer(ctx context.Context) {
+func StartOTelConsumer(ctx context.Context, redisClient *redis.Client) {
 	tracer := otel.Tracer("aegis-proxy/interceptor")
 	meter := otel.Meter("aegis-proxy/metrics")
 
@@ -48,6 +50,14 @@ func StartOTelConsumer(ctx context.Context) {
 					attribute.Bool("aegis.action_blocked", true),
 				)
 				span.End()
+			}
+			
+			if redisClient != nil {
+				payload, err := json.Marshal(evt)
+				if err == nil {
+					// The OSS proxy publishes to the global telemetry channel
+					redisClient.Publish(ctx, "telemetry:pubsub", string(payload))
+				}
 			}
 		}
 	}
