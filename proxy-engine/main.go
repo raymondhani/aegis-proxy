@@ -1,6 +1,7 @@
 package main
 
 import (
+	"aegis/proxy/pkg/domain"
 	"aegis/proxy/pkg/infrastructure"
 	"aegis/proxy/pkg/infrastructure/observability"
 	"aegis/proxy/pkg/infrastructure/repository"
@@ -59,6 +60,14 @@ func main() {
 
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
+	
+	// Add mock session for testing
+	repo.Store(&domain.Session{
+		ID:         "financial_bot_1",
+		TargetHost: "ep-odd-cake-afeipmzt-pooler.c-2.us-west-2.aws.neon.tech", // Target downstream PG
+		CreatedAt:  time.Now().Unix(),
+	})
+	
 	jailRepo := repository.NewInMemoryJailRepository()
 	policyManager := infrastructure.NewPolicyManager(redisClient)
 
