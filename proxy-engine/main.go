@@ -1,12 +1,12 @@
 package main
 
 import (
-	"aegis/proxy/pkg/domain"
-	"aegis/proxy/pkg/infrastructure"
-	"aegis/proxy/pkg/infrastructure/observability"
-	"aegis/proxy/pkg/infrastructure/repository"
-	"aegis/proxy/pkg/infrastructure/server"
-	"aegis/proxy/pkg/usecase"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/domain"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure/observability"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure/repository"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure/server"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/usecase"
 	"context"
 	"log/slog"
 	"os"

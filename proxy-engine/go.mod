@@ -1,4 +1,4 @@
-module aegis/proxy
+module github.com/raymondhani/aegis-proxy/proxy-engine
 
 go 1.25.0
 

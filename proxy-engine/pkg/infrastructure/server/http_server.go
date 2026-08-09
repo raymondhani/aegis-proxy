@@ -1,8 +1,8 @@
 package server
 
 import (
-	"aegis/proxy/pkg/domain"
-	"aegis/proxy/pkg/usecase"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/domain"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/usecase"
 	"encoding/json"
 	"log"
 	"net/http"

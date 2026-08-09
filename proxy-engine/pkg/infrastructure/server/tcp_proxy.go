@@ -1,9 +1,9 @@
 package server
 
 import (
-	"aegis/proxy/pkg/domain"
-	"aegis/proxy/pkg/infrastructure"
-	"aegis/proxy/pkg/usecase"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/domain"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/usecase"
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
