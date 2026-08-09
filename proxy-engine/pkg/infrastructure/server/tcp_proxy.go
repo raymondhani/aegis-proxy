@@ -37,6 +37,7 @@ type TCPProxy struct {
 	authenticator   Authenticator
 	policyValidator usecase.PolicyValidator
 	policyManager   *infrastructure.PolicyManager
+	rateLimiter     domain.RateLimiter
 }
 
 // DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
@@ -64,6 +65,14 @@ func (p *TCPProxy) WithAuthenticator(auth Authenticator) {
 // WithPolicyValidator injects a custom policy validator (Tier 3)
 func (p *TCPProxy) WithPolicyValidator(validator usecase.PolicyValidator) {
 	p.policyValidator = validator
+}
+
+// WithRateLimiter injects a custom RateLimiter (e.g. enterprise adaptive
+// throttling). When none is injected, each connection defaults to a
+// StaticRateLimiter sized from the resolved policy, preserving existing
+// behavior for every current caller.
+func (p *TCPProxy) WithRateLimiter(limiter domain.RateLimiter) {
+	p.rateLimiter = limiter
 }
 
 
@@ -279,7 +288,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
-	tb := newTokenBucket(policy.RateLimitRPM)
+	rateLimiter := p.rateLimiter
+	if rateLimiter == nil {
+		rateLimiter = NewStaticRateLimiter(policy.RateLimitRPM)
+	}
 
 	// Maps to track Extended Protocol state for this connection to prevent bypasses
 	approvedStatements := make(map[string]bool) // stmtName -> bool
@@ -382,7 +394,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					}
 
 					// 1. Enforce query rate limit
-					if !tb.allow() {
+					if !rateLimiter.Allow(sessionID) {
 						RecordQueryBlocked()
 						slog.Error("Query rate limit exceeded",
 							slog.String("session_id", sessionID),
@@ -775,42 +787,4 @@ func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan 
 	}
 }
 
-// tokenBucket implements a standard thread-safe Token Bucket rate limiter.
-type tokenBucket struct {
-	rate         float64 // tokens added per second
-	capacity     float64
-	tokens       float64
-	lastRefilled time.Time
-	mu           sync.Mutex
-}
-
-func newTokenBucket(limitPerMin int) *tokenBucket {
-	rate := float64(limitPerMin) / 60.0
-	return &tokenBucket{
-		rate:         rate,
-		capacity:     float64(limitPerMin),
-		tokens:       float64(limitPerMin),
-		lastRefilled: time.Now(),
-	}
-}
-
-func (tb *tokenBucket) allow() bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(tb.lastRefilled).Seconds()
-	tb.lastRefilled = now
-
-	tb.tokens += elapsed * tb.rate
-	if tb.tokens > tb.capacity {
-		tb.tokens = tb.capacity
-	}
-
-	if tb.tokens >= 1.0 {
-		tb.tokens -= 1.0
-		return true
-	}
-	return false
-}
 
