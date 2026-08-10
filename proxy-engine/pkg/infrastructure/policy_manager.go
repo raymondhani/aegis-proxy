@@ -11,10 +11,9 @@ import (
 )
 
 type PolicyConfig struct {
-	RateLimitRPM         int  `json:"rate_limit_rpm"`
-	BlockMalicious       bool `json:"block_malicious"`
-	SQLGuillotine        bool `json:"sql_guillotine"`
-	MLAdaptiveThrottling bool `json:"ml_adaptive_throttling"`
+	RateLimitRPM   int  `json:"rate_limit_rpm"`
+	BlockMalicious bool `json:"block_malicious"`
+	SQLGuillotine  bool `json:"sql_guillotine"`
 }
 
 type PolicyManager struct {
@@ -55,10 +54,9 @@ func (pm *PolicyManager) GetPolicy(tenantID string) *PolicyConfig {
 			rpm, _ := strconv.Atoi(res["rate_limit_rpm"])
 			if rpm < 0 { rpm = 1000 }
 			config = &PolicyConfig{
-				RateLimitRPM:         rpm,
-				BlockMalicious:       res["block_malicious"] == "true",
-				SQLGuillotine:        res["sql_guillotine"] == "true",
-				MLAdaptiveThrottling: res["ml_adaptive_throttling"] == "true",
+				RateLimitRPM:   rpm,
+				BlockMalicious: res["block_malicious"] == "true",
+				SQLGuillotine:  res["sql_guillotine"] == "true",
 			}
 			pm.mu.Lock()
 			pm.cache[tenantID] = config

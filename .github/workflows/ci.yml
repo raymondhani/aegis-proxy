@@ -17,7 +17,7 @@ jobs:
       - name: Setup Go Environment
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
 
       - name: Download Go Dependencies
         run: |
@@ -28,6 +28,11 @@ jobs:
         run: |
           cd proxy-engine
           go build -o aegis-proxy main.go
+
+      - name: Test Go Proxy
+        run: |
+          cd proxy-engine
+          go test ./...
 
   test-python-sdk:
     name: Python SDK Verification

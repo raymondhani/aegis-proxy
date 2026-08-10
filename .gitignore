@@ -59,3 +59,9 @@ logs/
 .env
 INTERNAL_NOTES.md
 *.private.md
+
+# Graphify Knowledge Graph (local tool cache — regenerate with `graphify update .`)
+# Indexed per-sub-repo, because the workspace-root .gitignore excludes this
+# directory and makes its source invisible to a root-level index.
+graphify-out/
+.graphify_ast.json

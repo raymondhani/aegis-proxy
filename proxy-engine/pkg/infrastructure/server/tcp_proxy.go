@@ -1,9 +1,9 @@
 package server
 
 import (
-	"aegis/proxy/pkg/domain"
-	"aegis/proxy/pkg/infrastructure"
-	"aegis/proxy/pkg/usecase"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/domain"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure"
+	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/usecase"
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
@@ -37,6 +37,7 @@ type TCPProxy struct {
 	authenticator   Authenticator
 	policyValidator usecase.PolicyValidator
 	policyManager   *infrastructure.PolicyManager
+	rateLimiter     domain.RateLimiter
 }
 
 // DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
@@ -64,6 +65,14 @@ func (p *TCPProxy) WithAuthenticator(auth Authenticator) {
 // WithPolicyValidator injects a custom policy validator (Tier 3)
 func (p *TCPProxy) WithPolicyValidator(validator usecase.PolicyValidator) {
 	p.policyValidator = validator
+}
+
+// WithRateLimiter injects a custom RateLimiter (e.g. enterprise adaptive
+// throttling). When none is injected, each connection defaults to a
+// StaticRateLimiter sized from the resolved policy, preserving existing
+// behavior for every current caller.
+func (p *TCPProxy) WithRateLimiter(limiter domain.RateLimiter) {
+	p.rateLimiter = limiter
 }
 
 
@@ -115,6 +124,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	_, err := io.ReadFull(clientConn, header)
 	if err != nil {
 		slog.Error("Error reading connection header", slog.Any("error", err))
+		sendPgError(clientConn, fmt.Sprintf("failed to read connection header: %v", err))
 		return
 	}
 
@@ -130,6 +140,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		_, err = clientConn.Write([]byte{'N'})
 		if err != nil {
 			slog.Error("Error writing SSL rejection", slog.Any("error", err))
+			sendPgError(clientConn, fmt.Sprintf("failed to write SSL rejection: %v", err))
 			return
 		}
 
@@ -138,12 +149,14 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		_, err = io.ReadFull(clientConn, startupHeader)
 		if err != nil {
 			slog.Error("Error reading StartupMessage header", slog.Any("error", err))
+			sendPgError(clientConn, fmt.Sprintf("failed to read StartupMessage header: %v", err))
 			return
 		}
 
 		len2 := binary.BigEndian.Uint32(startupHeader[0:4])
 		if len2 < 8 || len2 > 10000 {
 			slog.Error("Invalid StartupMessage length after SSL refusal", slog.Uint64("length", uint64(len2)))
+			sendPgError(clientConn, fmt.Sprintf("invalid StartupMessage length: %d", len2))
 			return
 		}
 
@@ -151,6 +164,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		_, err = io.ReadFull(clientConn, rest)
 		if err != nil {
 			slog.Error("Error reading StartupMessage body", slog.Any("error", err))
+			sendPgError(clientConn, fmt.Sprintf("failed to read StartupMessage body: %v", err))
 			return
 		}
 		startupData = append(startupHeader, rest...)
@@ -158,12 +172,14 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		// Connection didn't start with SSLRequest; it began directly with StartupMessage.
 		if length < 8 || length > 10000 {
 			slog.Error("Invalid StartupMessage length", slog.Uint64("length", uint64(length)))
+			sendPgError(clientConn, fmt.Sprintf("invalid StartupMessage length: %d", length))
 			return
 		}
 		rest := make([]byte, length-8)
 		_, err = io.ReadFull(clientConn, rest)
 		if err != nil {
 			slog.Error("Error reading StartupMessage body", slog.Any("error", err))
+			sendPgError(clientConn, fmt.Sprintf("failed to read StartupMessage body: %v", err))
 			return
 		}
 		startupData = append(header, rest...)
@@ -229,6 +245,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	_, err = backendConn.Write(modifiedStartup)
 	if err != nil {
 		slog.Error("Error writing StartupMessage to backend", slog.String("session_id", sessionID), slog.Any("error", err))
+		sendPgError(clientConn, "failed to relay startup to backend database")
 		return
 	}
 
@@ -238,6 +255,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		t, packetBytes, err := readPgPacket(backendConn)
 		if err != nil {
 			slog.Error("Error reading backend packet during auth phase", slog.String("session_id", sessionID), slog.Any("error", err))
+			sendPgError(clientConn, "backend database connection failed during authentication")
 			return
 		}
 
@@ -249,6 +267,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 				_, err = clientConn.Write(modifiedPacket)
 				if err != nil {
 					slog.Error("Error sending modified SASL packet to client", slog.String("session_id", sessionID), slog.Any("error", err))
+					sendPgError(clientConn, "failed to relay authentication challenge")
 					return
 				}
 				break
@@ -259,6 +278,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		_, err = clientConn.Write(packetBytes)
 		if err != nil {
 			slog.Error("Error forwarding auth packet to client", slog.String("session_id", sessionID), slog.Any("error", err))
+			sendPgError(clientConn, "failed to relay authentication response")
 			return
 		}
 
@@ -279,7 +299,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
-	tb := newTokenBucket(policy.RateLimitRPM)
+	rateLimiter := p.rateLimiter
+	if rateLimiter == nil {
+		rateLimiter = NewStaticRateLimiter(policy.RateLimitRPM)
+	}
 
 	// Maps to track Extended Protocol state for this connection to prevent bypasses
 	approvedStatements := make(map[string]bool) // stmtName -> bool
@@ -382,7 +405,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					}
 
 					// 1. Enforce query rate limit
-					if !tb.allow() {
+					if !rateLimiter.Allow(sessionID) {
 						RecordQueryBlocked()
 						slog.Error("Query rate limit exceeded",
 							slog.String("session_id", sessionID),
@@ -775,42 +798,4 @@ func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration, errChan 
 	}
 }
 
-// tokenBucket implements a standard thread-safe Token Bucket rate limiter.
-type tokenBucket struct {
-	rate         float64 // tokens added per second
-	capacity     float64
-	tokens       float64
-	lastRefilled time.Time
-	mu           sync.Mutex
-}
-
-func newTokenBucket(limitPerMin int) *tokenBucket {
-	rate := float64(limitPerMin) / 60.0
-	return &tokenBucket{
-		rate:         rate,
-		capacity:     float64(limitPerMin),
-		tokens:       float64(limitPerMin),
-		lastRefilled: time.Now(),
-	}
-}
-
-func (tb *tokenBucket) allow() bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(tb.lastRefilled).Seconds()
-	tb.lastRefilled = now
-
-	tb.tokens += elapsed * tb.rate
-	if tb.tokens > tb.capacity {
-		tb.tokens = tb.capacity
-	}
-
-	if tb.tokens >= 1.0 {
-		tb.tokens -= 1.0
-		return true
-	}
-	return false
-}
 
