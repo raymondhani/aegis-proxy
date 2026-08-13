@@ -65,3 +65,4 @@ INTERNAL_NOTES.md
 # directory and makes its source invisible to a root-level index.
 graphify-out/
 .graphify_ast.json
+docker-compose.override.yml
