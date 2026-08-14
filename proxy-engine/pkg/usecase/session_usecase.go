@@ -15,14 +15,18 @@ func NewSessionUseCase(repo domain.SessionRepository) *SessionUseCase {
 	return &SessionUseCase{repo: repo}
 }
 
-// RegisterSession saves a session ID and its target database endpoint mapping.
-func (u *SessionUseCase) RegisterSession(id, targetHost string) error {
+// RegisterSession saves a session ID, its target database endpoint mapping, and the tenant
+// it belongs to. tenantID may be empty (e.g. the direct-SDK flow, which has no SaaS control
+// plane in the loop) — callers reading it back MUST treat "" as "no tenant known" rather than
+// a real tenant, since PolicyManager.GetPolicy already does.
+func (u *SessionUseCase) RegisterSession(id, targetHost, tenantID string) error {
 	if id == "" || targetHost == "" {
 		return errors.New("invalid arguments: session_id and target_host are required")
 	}
 	sess := &domain.Session{
 		ID:         id,
 		TargetHost: targetHost,
+		TenantID:   tenantID,
 	}
 	return u.repo.Store(sess)
 }

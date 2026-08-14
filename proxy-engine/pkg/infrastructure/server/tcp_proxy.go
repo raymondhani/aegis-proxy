@@ -38,6 +38,17 @@ type TCPProxy struct {
 	policyValidator usecase.PolicyValidator
 	policyManager   *infrastructure.PolicyManager
 	rateLimiter     domain.RateLimiter
+
+	// tenantLimiters holds one shared StaticRateLimiter per tenant, keyed by tenant ID (or
+	// "default" when a session carries none). Only used when no custom rateLimiter has been
+	// injected via WithRateLimiter. Sharing one instance per tenant across every connection
+	// that tenant opens is what makes the configured rate_limit_rpm an actual ceiling on the
+	// tenant's aggregate traffic — constructing a fresh limiter per accepted connection (the
+	// prior behavior) reset every connection's own bucket to full, so the limit never
+	// actually engaged. The tradeoff: a limiter's rate/capacity is fixed at first creation for
+	// the life of the process; a later policy change for that tenant will not resize it.
+	tenantLimiters   map[string]*StaticRateLimiter
+	tenantLimitersMu sync.Mutex
 }
 
 // DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
@@ -54,6 +65,7 @@ func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.
 		authenticator:   &DefaultJWTAuthenticator{},
 		policyValidator: nil, // Optional: injected via Enterprise Guardrail
 		policyManager:   policyManager,
+		tenantLimiters:  make(map[string]*StaticRateLimiter),
 	}
 }
 
@@ -68,11 +80,24 @@ func (p *TCPProxy) WithPolicyValidator(validator usecase.PolicyValidator) {
 }
 
 // WithRateLimiter injects a custom RateLimiter (e.g. enterprise adaptive
-// throttling). When none is injected, each connection defaults to a
-// StaticRateLimiter sized from the resolved policy, preserving existing
-// behavior for every current caller.
+// throttling). When none is injected, every connection for a given tenant
+// shares one StaticRateLimiter sized from that tenant's resolved policy.
 func (p *TCPProxy) WithRateLimiter(limiter domain.RateLimiter) {
 	p.rateLimiter = limiter
+}
+
+// getOrCreateTenantRateLimiter returns the shared StaticRateLimiter for tenantKey, creating
+// and caching it on first use so every connection from the same tenant draws down the same
+// bucket instead of each getting its own full one.
+func (p *TCPProxy) getOrCreateTenantRateLimiter(tenantKey string, rpm int) *StaticRateLimiter {
+	p.tenantLimitersMu.Lock()
+	defer p.tenantLimitersMu.Unlock()
+	if limiter, ok := p.tenantLimiters[tenantKey]; ok {
+		return limiter
+	}
+	limiter := NewStaticRateLimiter(rpm)
+	p.tenantLimiters[tenantKey] = limiter
+	return limiter
 }
 
 
@@ -294,14 +319,19 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		}
 	}
 
-	// Fetch policy (tenant routing handled by enterprise wrapper via Context)
-	policy := p.policyManager.GetPolicy("default")
+	// Fetch policy for the connecting session's actual tenant (empty for the direct-SDK flow,
+	// which has no tenant of its own — GetPolicy treats that the same as an unknown tenant).
+	tenantKey := sess.TenantID
+	if tenantKey == "" {
+		tenantKey = "default"
+	}
+	policy := p.policyManager.GetPolicy(sess.TenantID)
 
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
 	rateLimiter := p.rateLimiter
 	if rateLimiter == nil {
-		rateLimiter = NewStaticRateLimiter(policy.RateLimitRPM)
+		rateLimiter = p.getOrCreateTenantRateLimiter(tenantKey, policy.RateLimitRPM)
 	}
 
 	// Maps to track Extended Protocol state for this connection to prevent bypasses

@@ -69,3 +69,47 @@ func TestDefaultJWTAuthenticator(t *testing.T) {
 		})
 	}
 }
+
+// TestGetOrCreateTenantRateLimiterSharesInstancePerTenant guards against the regression this
+// fixed: handleConnection used to construct a brand-new StaticRateLimiter (fresh full bucket)
+// for every accepted connection, so a tenant's configured rate never actually capped its
+// aggregate traffic -- it capped nothing, since no connection ever lived long enough to drain
+// its own private bucket. Repeated lookups for the same tenant must return the same instance.
+func TestGetOrCreateTenantRateLimiterSharesInstancePerTenant(t *testing.T) {
+	proxy := newTestProxy()
+
+	first := proxy.getOrCreateTenantRateLimiter("tenant-a", 100)
+	second := proxy.getOrCreateTenantRateLimiter("tenant-a", 100)
+	if first != second {
+		t.Fatal("expected repeated lookups for the same tenant to return the same shared limiter instance")
+	}
+
+	other := proxy.getOrCreateTenantRateLimiter("tenant-b", 100)
+	if other == first {
+		t.Fatal("expected a different tenant to receive its own, independent limiter instance")
+	}
+}
+
+// TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections is the direct regression
+// test for the bug: three separate lookups for the same tenant (simulating three separate
+// accepted TCP connections, exactly what handleConnection does per connection) must draw down
+// one shared budget, not get three independent full buckets.
+func TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections(t *testing.T) {
+	proxy := newTestProxy()
+
+	const rpm = 2
+	limiterConn1 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
+	limiterConn2 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
+	limiterConn3 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
+
+	if !limiterConn1.Allow("conn-1") {
+		t.Fatal("expected the first request against the tenant's shared budget to be allowed")
+	}
+	if !limiterConn2.Allow("conn-2") {
+		t.Fatal("expected the second request against the tenant's shared budget to be allowed")
+	}
+	if limiterConn3.Allow("conn-3") {
+		t.Fatal("expected the third request to be denied: the tenant's 2/min shared budget is " +
+			"already exhausted, even though this lookup simulates a brand-new connection")
+	}
+}

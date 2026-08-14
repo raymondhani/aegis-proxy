@@ -4,6 +4,7 @@ package domain
 type Session struct {
 	ID         string `json:"session_id"`
 	TargetHost string `json:"target_host"`
+	TenantID   string `json:"tenant_id"`
 	Status     string `json:"status"`
 	CreatedAt  int64  `json:"created_at"`
 }

@@ -30,6 +30,7 @@ func NewHTTPServer(useCase *usecase.SessionUseCase, jailRepo domain.JailReposito
 type RegisterRequest struct {
 	SessionID  string `json:"session_id"`
 	TargetHost string `json:"target_host"`
+	TenantID   string `json:"tenant_id"`
 }
 
 // Start listens and serves HTTP requests.
@@ -69,7 +70,7 @@ func (s *HTTPServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.useCase.RegisterSession(req.SessionID, req.TargetHost); err != nil {
+	if err := s.useCase.RegisterSession(req.SessionID, req.TargetHost, req.TenantID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
