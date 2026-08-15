@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/domain"
 	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure"
 	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure/observability"
 	"github.com/raymondhani/aegis-proxy/proxy-engine/pkg/infrastructure/repository"
@@ -66,14 +65,7 @@ func main() {
 
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
-	
-	// Add mock session for testing
-	repo.Store(&domain.Session{
-		ID:         "financial_bot_1",
-		TargetHost: "ep-odd-cake-afeipmzt-pooler.c-2.us-west-2.aws.neon.tech", // Target downstream PG
-		CreatedAt:  time.Now().Unix(),
-	})
-	
+
 	jailRepo := repository.NewInMemoryJailRepository()
 	// Pass a nil client when Redis is unavailable so PolicyManager falls back to
 	// default policies immediately instead of retrying failed calls against a dead connection.
