@@ -36,27 +36,33 @@ func main() {
 		}
 	}()
 
-	// Connect to Redis
+	// Connect to Redis (optional: Redis is an Enterprise HA dependency, not required by OSS)
 	redisURL := os.Getenv("AEGIS_REDIS_URL")
 	if redisURL == "" {
 		redisURL = "redis://localhost:6379"
 	}
 
+	var redisClient *redis.Client
+	redisAvailable := false
+
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
-		slog.Error("Failed to parse Redis URL", slog.Any("error", err))
-		os.Exit(1)
-	}
-	redisClient := redis.NewClient(opts)
-	defer redisClient.Close()
+		slog.Warn("Failed to parse Redis URL, continuing without Redis (in-memory mode, policy sync and OTel-over-Redis consumer disabled)", slog.Any("error", err))
+	} else {
+		redisClient = redis.NewClient(opts)
+		defer redisClient.Close()
 
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		slog.Error("Failed to connect to Redis", slog.Any("error", err))
-		os.Exit(1)
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			slog.Warn("Failed to connect to Redis, continuing without Redis (in-memory mode, policy sync and OTel-over-Redis consumer disabled)", slog.Any("error", err))
+		} else {
+			redisAvailable = true
+		}
 	}
 
-	// Start OpenTelemetry consumer for TelemetryBus
-	go server.StartOTelConsumer(ctx, redisClient)
+	// Start OpenTelemetry consumer for TelemetryBus (only when Redis is actually reachable)
+	if redisAvailable {
+		go server.StartOTelConsumer(ctx, redisClient)
+	}
 
 	repo := repository.NewInMemorySessionRepository()
 	useCase := usecase.NewSessionUseCase(repo)
@@ -69,7 +75,14 @@ func main() {
 	})
 	
 	jailRepo := repository.NewInMemoryJailRepository()
-	policyManager := infrastructure.NewPolicyManager(redisClient)
+	// Pass a nil client when Redis is unavailable so PolicyManager falls back to
+	// default policies immediately instead of retrying failed calls against a dead connection.
+	var policyManager *infrastructure.PolicyManager
+	if redisAvailable {
+		policyManager = infrastructure.NewPolicyManager(redisClient)
+	} else {
+		policyManager = infrastructure.NewPolicyManager(nil)
+	}
 
 	// Set listening addresses and configuration mode (bind to 0.0.0.0 for Docker compatibility)
 	tcpAddr := "0.0.0.0:5433"

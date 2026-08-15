@@ -1,9 +1,4 @@
 services:
-  redis:
-    image: redis:7-alpine
-    networks:
-      - aegis-net
-
   aegis-proxy:
     image: raymondartin2/aegis-proxy:latest
     container_name: aegis-proxy
@@ -14,9 +9,6 @@ services:
       - .env
     environment:
       - AEGIS_MODE=enforce
-      - AEGIS_REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
     networks:
       - aegis-net
 

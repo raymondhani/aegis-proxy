@@ -12,6 +12,28 @@ Aegis sits between your application and your Postgres database and blocks destru
 
 ## How it fits together
 
+```mermaid
+sequenceDiagram
+    participant App as Your Application<br/>(psycopg2, or any client)
+    participant Proxy as Aegis Proxy<br/>:5433 TCP intercept / :5434 admin+metrics
+    participant DB as Your Database<br/>(e.g. Neon Postgres)
+
+    App->>Proxy: SELECT ... (benign query)
+    Proxy->>DB: forwarded over TLS
+    DB-->>Proxy: rows
+    Proxy-->>App: rows
+
+    App->>Proxy: DROP TABLE ... (destructive query)
+    Note over Proxy: parsed, blocked, connection terminated<br/>(the "Guillotine")
+    Proxy-->>App: fatal error
+    Note over DB: never reached
+```
+
+Your application never talks to the database directly — every query passes through the proxy first. A benign query is forwarded and the rows come straight back. A destructive one (`DROP TABLE`, an unfiltered `DELETE`, etc.) is intercepted and the connection is terminated before it reaches your database.
+
+<details>
+<summary>Plain-text diagram (terminal-friendly)</summary>
+
 ```
       Your Application                          Aegis Proxy                            Your Database
    (psycopg2, or any client)                                                          (e.g. Neon Postgres)
@@ -27,19 +49,38 @@ Aegis sits between your application and your Postgres database and blocks destru
                                               +-----------------------------+
 ```
 
-Your application never talks to the database directly — every query passes through the proxy first. A benign query is forwarded and the rows come straight back. A destructive one (`DROP TABLE`, an unfiltered `DELETE`, etc.) is intercepted and the connection is terminated before it reaches your database.
+</details>
 
 ## Quickstart
 
 Three steps, one command to start the stack, and a running proxy.
 
-### Step 1 — Get the code and your credentials
+### Step 1 — Get Aegis and your credentials
+
+The primary way to install Aegis is to pull the published image straight from Docker Hub:
+
+```bash
+docker pull raymondartin2/aegis-proxy
+```
+
+**Expected output** (tag/digest will vary by release):
+
+```text
+latest: Pulling from raymondartin2/aegis-proxy
+Digest: sha256:...
+Status: Downloaded newer image for raymondartin2/aegis-proxy:latest
+docker.io/raymondartin2/aegis-proxy:latest
+```
+
+You still need this repo's `docker-compose.yml` and `.env.sample` to run the stack, so grab those too:
 
 ```bash
 git clone https://github.com/raymondhani/aegis-proxy.git
 cd aegis-proxy
 cp .env.sample .env
 ```
+
+<sub>Building the image yourself instead of pulling it is also supported — see `Dockerfile` in this repo — but pulling the published image is the recommended, primary path.</sub>
 
 Now open `.env` and replace the four placeholders with your own values:
 
@@ -58,14 +99,13 @@ None of these are optional: the proxy exits immediately at startup if `AEGIS_JWT
 docker compose up -d
 ```
 
-**Expected output** (container names may vary slightly depending on your folder name):
+**Expected output** (container name may vary slightly depending on your folder name):
 
 ```text
- Container aegis-project-redis-1  Started
  Container aegis-proxy            Started
 ```
 
-This single command starts both containers Aegis needs: Redis (used for policy state) and the proxy itself, listening on `5433` (the database connection) and `5434` (an admin/metrics API).
+This single command starts the container Aegis needs: the proxy itself, listening on `5433` (the database connection) and `5434` (an admin/metrics API). The OSS proxy runs on in-memory state and has no hard dependency on Redis — Redis is used only by the Enterprise tier for distributed/HA state.
 
 ### Step 3 — Confirm it's running
 
@@ -202,7 +242,7 @@ The open-source proxy is built for local development and single-node sandboxing.
 - **Cryptographic Identity Validation:** Verifies JWTs against cached JWKS to prevent API key sharing.
 - **Distributed State:** Redis-backed rate limiting for High Availability (HA) clusters.
 - **SIEM Exporters:** Batches and streams anomaly events directly to Datadog and Splunk.
-- **SaaS Control Plane:** The managed control plane is available at port `3000`.
+- **Local Management Console:** A self-hosted control plane is available at port `3000`.
 
 *Need production-grade guardrails for your AI agents? Contact our enterprise team at **aegis@languaza.net** to schedule a technical architecture review.*
 
