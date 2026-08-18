@@ -1,6 +1,16 @@
 services:
   aegis-proxy:
-    image: raymondartin2/aegis-proxy:latest
+    # Built from this checkout rather than pulled from a published tag. The published
+    # raymondartin2/aegis-proxy:latest image predates the Redis-optional change and exits 1 when
+    # it cannot reach Redis, which contradicts what README.md now tells a reader to expect ("no
+    # hard dependency on Redis") and left `docker compose up -d` producing a container that died
+    # on startup while `up -d` itself still reported success. Building here keeps the quickstart
+    # honest — a reader who clones this repo runs the code they just cloned — and removes the
+    # registry pull, which is what lets the stack come up with no network egress at all.
+    build:
+      context: .
+      dockerfile: Dockerfile.oss
+    image: aegis-proxy:local
     container_name: aegis-proxy
     ports:
       - "5433:5433" # TCP Proxy port

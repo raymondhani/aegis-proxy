@@ -113,3 +113,70 @@ func TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections(t *testing
 			"already exhausted, even though this lookup simulates a brand-new connection")
 	}
 }
+
+
+// TestResolveBackendPlaintextDefaultsToTLS pins the security-relevant half of the
+// AEGIS_BACKEND_TLS contract: plaintext is reachable only through the exact opt-in value, and
+// every other input — unset, empty, a typo, or a value borrowed from some other tool's
+// vocabulary — must keep dialing TLS. A regression here would silently downgrade a real
+// database connection to plaintext, which is why the unrecognised cases are enumerated rather
+// than left to a single "not disable" assertion.
+func TestResolveBackendPlaintextDefaultsToTLS(t *testing.T) {
+	cases := []struct {
+		name          string
+		set           bool
+		value         string
+		wantPlaintext bool
+	}{
+		{name: "unset", set: false, wantPlaintext: false},
+		{name: "empty", set: true, value: "", wantPlaintext: false},
+		{name: "disable", set: true, value: "disable", wantPlaintext: true},
+		{name: "disable mixed case", set: true, value: "DiSaBlE", wantPlaintext: true},
+		{name: "disable padded", set: true, value: "  disable  ", wantPlaintext: true},
+		{name: "require", set: true, value: "require", wantPlaintext: false},
+		{name: "typo disabled", set: true, value: "disabled", wantPlaintext: false},
+		{name: "off", set: true, value: "off", wantPlaintext: false},
+		{name: "false", set: true, value: "false", wantPlaintext: false},
+		{name: "zero", set: true, value: "0", wantPlaintext: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Unsetenv("AEGIS_BACKEND_TLS")
+			if tc.set {
+				os.Setenv("AEGIS_BACKEND_TLS", tc.value)
+				defer os.Unsetenv("AEGIS_BACKEND_TLS")
+			}
+
+			if got := resolveBackendPlaintext(); got != tc.wantPlaintext {
+				t.Fatalf("AEGIS_BACKEND_TLS=%q: got plaintext=%v, want %v",
+					tc.value, got, tc.wantPlaintext)
+			}
+		})
+	}
+}
+
+// TestNewTCPProxyCapturesBackendModeAtConstruction confirms the resolved mode is carried on the
+// proxy itself, so both tiers get it from the one shared constructor rather than each reading
+// the environment at its own dial site.
+func TestNewTCPProxyCapturesBackendModeAtConstruction(t *testing.T) {
+	os.Setenv("AEGIS_BACKEND_TLS", "disable")
+	defer os.Unsetenv("AEGIS_BACKEND_TLS")
+
+	p := NewTCPProxy(nil, "oss", 0, nil, nil, nil)
+	if !p.backendPlaintext {
+		t.Fatal("expected AEGIS_BACKEND_TLS=disable to select a plaintext backend dial")
+	}
+	if p.backendTLSMode() != "disable" {
+		t.Fatalf("expected reported mode \"disable\", got %q", p.backendTLSMode())
+	}
+
+	os.Setenv("AEGIS_BACKEND_TLS", "require")
+	q := NewTCPProxy(nil, "oss", 0, nil, nil, nil)
+	if q.backendPlaintext {
+		t.Fatal("expected AEGIS_BACKEND_TLS=require to keep the TLS backend dial")
+	}
+	if q.backendTLSMode() != "require" {
+		t.Fatalf("expected reported mode \"require\", got %q", q.backendTLSMode())
+	}
+}

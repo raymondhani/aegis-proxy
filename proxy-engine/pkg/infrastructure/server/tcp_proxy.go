@@ -39,6 +39,12 @@ type TCPProxy struct {
 	policyManager   *infrastructure.PolicyManager
 	rateLimiter     domain.RateLimiter
 
+	// backendPlaintext selects a plaintext net.Dial for the backend connection instead of
+	// tls.Dial. It is opt-in only, via AEGIS_BACKEND_TLS=disable, so a local Postgres
+	// container that serves no TLS can be used as a backend for offline testing. TLS remains
+	// the default for a missing or unrecognised value — see resolveBackendPlaintext.
+	backendPlaintext bool
+
 	// tenantLimiters holds one shared StaticRateLimiter per tenant, keyed by tenant ID (or
 	// "default" when a session carries none). Only used when no custom rateLimiter has been
 	// injected via WithRateLimiter. Sharing one instance per tenant across every connection
@@ -54,6 +60,36 @@ type TCPProxy struct {
 // DefaultJWTAuthenticator implements basic JWT verification for OSS Tier 1.
 type DefaultJWTAuthenticator struct{}
 
+// resolveBackendPlaintext reads AEGIS_BACKEND_TLS and reports whether the backend dial should
+// skip TLS. The accepted values mirror libpq's sslmode vocabulary: "disable" opts in to a
+// plaintext dial, "require" is the explicit form of the default. TLS is the behaviour for every
+// other input — unset, empty, or unrecognised — so no deployment can silently downgrade to
+// plaintext against a real database by way of a typo. An unrecognised value is logged rather
+// than ignored, so a misspelling is visible in the run's own output.
+func resolveBackendPlaintext() bool {
+	raw := strings.TrimSpace(os.Getenv("AEGIS_BACKEND_TLS"))
+	switch strings.ToLower(raw) {
+	case "":
+		return false
+	case "disable":
+		return true
+	case "require":
+		return false
+	default:
+		slog.Warn("Unrecognised AEGIS_BACKEND_TLS value; dialing backend over TLS",
+			slog.String("value", raw))
+		return false
+	}
+}
+
+// backendTLSMode returns the resolved mode as the value that would select it, for logging.
+func (p *TCPProxy) backendTLSMode() string {
+	if p.backendPlaintext {
+		return "disable"
+	}
+	return "require"
+}
+
 // NewTCPProxy instantiates a TCPProxy.
 func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.Duration, jailRepo domain.JailRepository, queryInspector usecase.QueryInspector, policyManager *infrastructure.PolicyManager) *TCPProxy {
 	return &TCPProxy{
@@ -66,6 +102,8 @@ func NewTCPProxy(useCase *usecase.SessionUseCase, mode string, idleTimeout time.
 		policyValidator: nil, // Optional: injected via Enterprise Guardrail
 		policyManager:   policyManager,
 		tenantLimiters:  make(map[string]*StaticRateLimiter),
+
+		backendPlaintext: resolveBackendPlaintext(),
 	}
 }
 
@@ -109,7 +147,12 @@ func (p *TCPProxy) Start(addr string) error {
 		return err
 	}
 	defer listener.Close()
-	slog.Info("TCPProxy listening", slog.String("address", addr))
+	slog.Info("TCPProxy listening", slog.String("address", addr),
+		slog.String("backend_tls", p.backendTLSMode()))
+	if p.backendPlaintext {
+		slog.Warn("Backend TLS is DISABLED: backend connections will be dialed in plaintext. " +
+			"This is intended for local testing only and must never be set against a real database.")
+	}
 
 	// Limit concurrent connections to prevent FD exhaustion and OOM
 	connSemaphore := semaphore.NewWeighted(10000)
@@ -243,7 +286,10 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	targetHost := sess.TargetHost
 	slog.Info("Resolving target host for session", slog.String("session_id", sessionID), slog.String("target_host", targetHost))
 
-	// Neon endpoints enforce SSL. We must establish a secure TLS connection.
+	// Hosted endpoints such as Neon enforce SSL, so a TLS dial is the default. A local
+	// Postgres container serves no TLS at all, and dialing it with tls.Dial fails the
+	// handshake and surfaces to the client as a bare EOF; AEGIS_BACKEND_TLS=disable selects
+	// net.Dial for that case. See resolveBackendPlaintext for why the opt-in is narrow.
 	if !strings.Contains(targetHost, ":") {
 		targetHost = targetHost + ":5432"
 	}
@@ -252,14 +298,19 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		hostOnly = targetHost
 	}
 
-	tlsConfig := &tls.Config{
-		ServerName: hostOnly,
+	var backendConn net.Conn
+	if p.backendPlaintext {
+		slog.Info("Connecting to backend in plaintext", slog.String("session_id", sessionID), slog.String("target_host", targetHost))
+		backendConn, err = net.Dial("tcp", targetHost)
+	} else {
+		tlsConfig := &tls.Config{
+			ServerName: hostOnly,
+		}
+		slog.Info("Connecting to backend via TLS", slog.String("session_id", sessionID), slog.String("target_host", targetHost), slog.String("sni", hostOnly))
+		backendConn, err = tls.Dial("tcp", targetHost, tlsConfig)
 	}
-
-	slog.Info("Connecting to Neon backend via TLS", slog.String("session_id", sessionID), slog.String("target_host", targetHost), slog.String("sni", hostOnly))
-	backendConn, err := tls.Dial("tcp", targetHost, tlsConfig)
 	if err != nil {
-		slog.Error("Connection to Neon backend failed", slog.String("session_id", sessionID), slog.Any("error", err))
+		slog.Error("Connection to backend failed", slog.String("session_id", sessionID), slog.String("backend_tls", p.backendTLSMode()), slog.Any("error", err))
 		sendPgError(clientConn, fmt.Sprintf("failed to establish connection to backend database: %v", err))
 		return
 	}
