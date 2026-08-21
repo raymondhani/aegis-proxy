@@ -485,7 +485,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 						slog.Error("Query rejected: session is jailed",
 							slog.String("session_id", sessionID),
 							slog.String("query", queryStr))
-						sendPgError(clientConn, "Aegis Proxy Error: Session has been jailed due to anomalous behavior.")
+						sendPgErrorWithControl(clientConn, "Aegis Proxy Error: Session has been jailed due to anomalous behavior.", "jail")
 						errChan <- errors.New("session jailed")
 						return
 					}
@@ -504,7 +504,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 							slog.String("session_id", sessionID),
 							slog.String("query", queryStr),
 							slog.Int("limit_per_min", currentPolicy.RateLimitRPM))
-						sendPgError(clientConn, "Aegis Proxy Error: Query rate limit exceeded. Connection terminated.")
+						sendPgErrorWithControl(clientConn, "Aegis Proxy Error: Query rate limit exceeded. Connection terminated.", "rate_limit")
 						errChan <- errors.New("rate limit exceeded")
 
 						EmitQueryEvent(QueryEvent{
@@ -534,7 +534,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 								slog.Error("Blocked destructive SQL query from client",
 									slog.String("session_id", sessionID),
 									slog.String("query", queryStr))
-								sendPgError(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.")
+								sendPgErrorWithControl(clientConn, "Aegis Proxy Error: Destructive SQL execution blocked at the network layer.", "guillotine")
 								errChan <- errors.New("destructive query blocked")
 								
 								EmitQueryEvent(QueryEvent{
@@ -558,7 +558,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 							slog.Error("Blocked query due to enterprise policy violation",
 								slog.String("session_id", sessionID),
 								slog.String("query", queryStr))
-							sendPgError(clientConn, "Aegis Proxy Error: Query blocked by Enterprise RBAC Policy.")
+							sendPgErrorWithControl(clientConn, "Aegis Proxy Error: Query blocked by Enterprise RBAC Policy.", "rbac")
 							errChan <- errors.New("policy violation")
 							
 							EmitQueryEvent(QueryEvent{
@@ -736,6 +736,18 @@ func (sm *StartupMessage) serialize() []byte {
 }
 
 func sendPgError(conn net.Conn, message string) {
+	sendPgErrorWithControl(conn, message, "")
+}
+
+// sendPgErrorWithControl behaves exactly like sendPgError but also attaches a Detail ('D') field
+// naming the protective control responsible for the refusal (contracts/control-precedence.md:
+// "jail", "rate_limit", "guillotine", or "rbac"), when one is known. This is what lets a refusal
+// on the wire identify which control refused it (FR-065) as a structured field, rather than only
+// through the free-text Message a client would otherwise have to pattern-match. responsibleControl
+// is omitted from the frame entirely (no 'D' field at all) when empty, which every call site that
+// isn't part of the precedence chain (handshake/auth/routing failures) continues to be via the
+// plain sendPgError above.
+func sendPgErrorWithControl(conn net.Conn, message string, responsibleControl string) {
 	var buf bytes.Buffer
 	buf.WriteByte('E')            // Error response indicator
 	buf.Write([]byte{0, 0, 0, 0}) // length placeholder
@@ -751,6 +763,12 @@ func sendPgError(conn net.Conn, message string) {
 	buf.WriteByte('M')
 	buf.WriteString("Aegis DB Proxy error: " + message)
 	buf.WriteByte(0)
+
+	if responsibleControl != "" {
+		buf.WriteByte('D')
+		buf.WriteString("responsible_control=" + responsibleControl)
+		buf.WriteByte(0)
+	}
 
 	buf.WriteByte(0)
 
