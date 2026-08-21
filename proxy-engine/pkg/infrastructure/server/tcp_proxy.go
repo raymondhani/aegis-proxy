@@ -737,6 +737,42 @@ func sendPgError(conn net.Conn, message string) {
 	data := buf.Bytes()
 	binary.BigEndian.PutUint32(data[1:5], uint32(len(data)-1))
 	_, _ = conn.Write(data)
+
+	drainPendingInput(conn)
+}
+
+// drainPendingInput closes the write half of conn gracefully and discards whatever the peer
+// has already sent but this proxy has not yet read, for a short bounded window. Every
+// sendPgError call site returns immediately afterward, which triggers handleConnection's
+// deferred conn.Close() moments later. On a real TCP socket, fully closing a connection
+// while unread inbound bytes remain sends an abortive RST instead of a graceful FIN, and
+// that RST can discard the error frame just written along with it -- even though the Write
+// above already completed successfully. This is exactly the long-open FR-014 gap (client
+// observes severity=None/sqlstate=None instead of FATAL/08006): a client that pipelines a
+// further protocol message ahead of a response (e.g. Sync sent immediately after Execute in
+// the extended query protocol, without waiting) leaves bytes sitting unread in the kernel
+// receive buffer at refusal time.
+//
+// CloseWrite (shutdown, write-only) is unaffected by unread inbound data -- unlike a full
+// Close, it always flushes the pending write and sends a graceful FIN -- so the frame is
+// safely handed off to the network before the caller's later full Close can ever turn into a
+// destructive RST. Draining any remaining backlog on top of that closes the residual race
+// where the caller's full Close still finds unread bytes buffered on our side. Only real TCP
+// connections exhibit this failure mode -- net.Pipe (used in tests) is synchronous and has no
+// send/receive buffering to race, so it is left untouched.
+func drainPendingInput(conn net.Conn) {
+	tc, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tc.CloseWrite()
+	_ = tc.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	buf := make([]byte, 4096)
+	for {
+		if _, err := tc.Read(buf); err != nil {
+			break
+		}
+	}
 }
 
 func readPgPacket(r io.Reader) (byte, []byte, error) {
