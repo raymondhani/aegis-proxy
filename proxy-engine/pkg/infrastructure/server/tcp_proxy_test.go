@@ -93,11 +93,13 @@ func TestGetOrCreateTenantRateLimiterSharesInstancePerTenant(t *testing.T) {
 // TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections is the direct regression
 // test for the bug: three separate lookups for the same tenant (simulating three separate
 // accepted TCP connections, exactly what handleConnection does per connection) must draw down
-// one shared budget, not get three independent full buckets.
+// one shared budget, not get three independent full buckets. rpm is 120, not 2, so that
+// burstCapacity(rpm) (Spec 004 T131, contracts/rate-ceiling.md decision 1 -- capacity is about a
+// second's worth of the budget, not the whole minute) still yields a capacity of exactly 2.
 func TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections(t *testing.T) {
 	proxy := newTestProxy()
 
-	const rpm = 2
+	const rpm = 120
 	limiterConn1 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
 	limiterConn2 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
 	limiterConn3 := proxy.getOrCreateTenantRateLimiter("tenant-shared", rpm)
@@ -109,7 +111,7 @@ func TestGetOrCreateTenantRateLimiterDrainsAcrossSimulatedConnections(t *testing
 		t.Fatal("expected the second request against the tenant's shared budget to be allowed")
 	}
 	if limiterConn3.Allow("conn-3") {
-		t.Fatal("expected the third request to be denied: the tenant's 2/min shared budget is " +
+		t.Fatal("expected the third request to be denied: the tenant's shared burst capacity of 2 is " +
 			"already exhausted, even though this lookup simulates a brand-new connection")
 	}
 }

@@ -51,8 +51,10 @@ type TCPProxy struct {
 	// that tenant opens is what makes the configured rate_limit_rpm an actual ceiling on the
 	// tenant's aggregate traffic — constructing a fresh limiter per accepted connection (the
 	// prior behavior) reset every connection's own bucket to full, so the limit never
-	// actually engaged. The tradeoff: a limiter's rate/capacity is fixed at first creation for
-	// the life of the process; a later policy change for that tenant will not resize it.
+	// actually engaged. getOrCreateTenantRateLimiter re-applies the current rate_limit_rpm via
+	// SetLimit on every call, not just on first creation, so a live policy change for that
+	// tenant resizes the shared limiter instead of being fixed at first creation
+	// (contracts/rate-ceiling.md decision 4, Spec 004 T134).
 	tenantLimiters   map[string]*StaticRateLimiter
 	tenantLimitersMu sync.Mutex
 }
@@ -124,17 +126,22 @@ func (p *TCPProxy) WithRateLimiter(limiter domain.RateLimiter) {
 	p.rateLimiter = limiter
 }
 
-// getOrCreateTenantRateLimiter returns the shared StaticRateLimiter for tenantKey, creating
-// and caching it on first use so every connection from the same tenant draws down the same
-// bucket instead of each getting its own full one.
+// getOrCreateTenantRateLimiter returns the shared StaticRateLimiter for tenantKey, creating and
+// caching it on first use so every connection from the same tenant draws down the same bucket
+// instead of each getting its own full one. rpm is re-applied via SetLimit on every call, not just
+// on cache-miss, so a tenant's current policy is always reflected -- including on a brand new
+// connection for an existing tenant whose ceiling changed since the limiter was first created
+// (contracts/rate-ceiling.md decision 4).
 func (p *TCPProxy) getOrCreateTenantRateLimiter(tenantKey string, rpm int) *StaticRateLimiter {
 	p.tenantLimitersMu.Lock()
 	defer p.tenantLimitersMu.Unlock()
-	if limiter, ok := p.tenantLimiters[tenantKey]; ok {
+	limiter, ok := p.tenantLimiters[tenantKey]
+	if !ok {
+		limiter = NewStaticRateLimiter(rpm)
+		p.tenantLimiters[tenantKey] = limiter
 		return limiter
 	}
-	limiter := NewStaticRateLimiter(rpm)
-	p.tenantLimiters[tenantKey] = limiter
+	limiter.SetLimit(rpm)
 	return limiter
 }
 
@@ -370,20 +377,18 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		}
 	}
 
-	// Fetch policy for the connecting session's actual tenant (empty for the direct-SDK flow,
-	// which has no tenant of its own — GetPolicy treats that the same as an unknown tenant).
+	// Tenant key for the connecting session (empty for the direct-SDK flow, which has no tenant
+	// of its own — GetPolicy treats that the same as an unknown tenant). The policy itself is
+	// re-fetched per query below, not cached here, so a live ceiling change is reflected on the
+	// very next query rather than only for connections opened after the change
+	// (contracts/rate-ceiling.md decision 4, Spec 004 T134).
 	tenantKey := sess.TenantID
 	if tenantKey == "" {
 		tenantKey = "default"
 	}
-	policy := p.policyManager.GetPolicy(sess.TenantID)
 
 	// Bidirectional stream proxying with query inspection on client-to-backend
 	errChan := make(chan error, 2)
-	rateLimiter := p.rateLimiter
-	if rateLimiter == nil {
-		rateLimiter = p.getOrCreateTenantRateLimiter(tenantKey, policy.RateLimitRPM)
-	}
 
 	// Maps to track Extended Protocol state for this connection to prevent bypasses
 	approvedStatements := make(map[string]bool) // stmtName -> bool
@@ -485,15 +490,30 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 						return
 					}
 
-					// 1. Enforce query rate limit
+					// 1. Enforce query rate limit. Policy and rate limiter are resolved fresh on
+					// every query, not cached for the connection's lifetime, so a live ceiling
+					// change governs the very next query (contracts/rate-ceiling.md decision 4).
+					currentPolicy := p.policyManager.GetPolicy(sess.TenantID)
+					rateLimiter := p.rateLimiter
+					if rateLimiter == nil {
+						rateLimiter = p.getOrCreateTenantRateLimiter(tenantKey, currentPolicy.RateLimitRPM)
+					}
 					if !rateLimiter.Allow(sessionID) {
 						RecordQueryBlocked()
 						slog.Error("Query rate limit exceeded",
 							slog.String("session_id", sessionID),
 							slog.String("query", queryStr),
-							slog.Int("limit_per_min", policy.RateLimitRPM))
+							slog.Int("limit_per_min", currentPolicy.RateLimitRPM))
 						sendPgError(clientConn, "Aegis Proxy Error: Query rate limit exceeded. Connection terminated.")
 						errChan <- errors.New("rate limit exceeded")
+
+						EmitQueryEvent(QueryEvent{
+							SessionID:   sessionID,
+							Fingerprint: FingerprintSQL(queryStr),
+							RawQuery:    queryStr,
+							Timestamp:   time.Now().UnixMilli(),
+							Blocked:     true,
+						})
 						return
 					}
 
