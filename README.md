@@ -10,6 +10,10 @@
 
 Aegis sits between your application and your Postgres database and blocks destructive queries before they run, without you changing a line of your database code.
 
+---
+> **👋 Note:** If you are cloning this to test the Wasm AST parser locally, please drop a ⭐ on the repo! It helps me know people are actually using the open-source tier.
+
+---
 ## How it fits together
 
 ```mermaid
@@ -176,6 +180,18 @@ The `SELECT 1` succeeds normally. The `DROP TABLE` never reaches the database �
 | `agent_id` | `str` | `None` | A label for this run, included in telemetry — useful when multiple agents share one proxy. |
 | `proxy_port` | `int` | `5433` | The TCP port the proxy is listening on, if you changed it from the default. |
 | `validation_rules` | `list` | built-in schema checks | Custom functions to run against the database schema before/after execution, replacing the defaults (no dropped tables, no dropped columns, every table keeps a primary key). |
+
+## Drop-in Guardrails for LangChain & AI Agents
+
+Because Aegis operates completely transparently at Layer-4 (the network layer), developers do not need to write custom application code, install framework-specific plugins, or change their AI logic. To secure an AI agent against hallucinations, simply spin up Aegis and change your standard database connection port from 5432 to 5433.
+
+```python
+# The Old, Dangerous Way (Direct to DB):
+db = SQLDatabase.from_uri("postgresql://user:pass@localhost:5432/my_db")
+
+# The Secure, Aegis Way (Routed through the Layer-4 Proxy):
+db = SQLDatabase.from_uri("postgresql://user:pass@localhost:5433/my_db")
+```
 
 ## What each tier gives you
 
